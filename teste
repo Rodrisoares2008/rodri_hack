@@ -7067,17 +7067,26 @@ userProfileSection = New("Frame", {
 Corner(8, userProfileSection)
 Stroke(C.Divider, 1, userProfileSection).Transparency = 0.4
 
--- User avatar (anime girl image)
+-- Avatar real do perfil Roblox do jogador local (sem imagem estática por asset ID)
 userAvatar = New("ImageLabel", {
 	Name = "Avatar",
 	BackgroundColor3 = C.BgInput,
 	BorderSizePixel = 0,
 	Position = UDim2.new(0, 8, 0, 8),
 	Size = UDim2.new(0, 44, 0, 44),
-	Image = "rbxassetid://114566700916767",
+	Image = "",
 	ImageColor3 = Color3.fromRGB(255, 255, 255),
 }, userProfileSection)
 Corner(22, userAvatar)
+
+task.spawn(function()
+	local ok, thumbnail = pcall(function()
+		return Players:GetUserThumbnailAsync(LocalPlayer.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size150x150)
+	end)
+	if ok and thumbnail and userAvatar and userAvatar.Parent then
+		userAvatar.Image = thumbnail
+	end
+end)
 
 -- Username label
 userNameLabel = New("TextLabel", {
@@ -15538,6 +15547,187 @@ blockClickToggle = createToggle(utilsContent, "Block Click Input", function(enab
 end, "Bloqueia cliques/taps para o jogo (o menu continua clicável).")
 blockClickToggle.LayoutOrder = 8
 blockClickToggle.Parent = utilRoot
+
+xpcall(function()
+	local STAT_TXT = Color3.fromRGB(150, 160, 185)
+	local BLUE = Color3.fromRGB(41, 121, 255)
+	local statsGui, statsConn
+
+	local function getPing()
+		local ok, v = pcall(function()
+			return Stats.Network.ServerStatsItem["Data Ping"]:GetValue()
+		end)
+		if ok and v then return math.floor(v + 0.5) end
+		local ok2, p = pcall(function() return LocalPlayer:GetNetworkPing() * 1000 end)
+		if ok2 and p then return math.floor(p + 0.5) end
+		return 0
+	end
+
+	local function destroyStats()
+		if statsConn then statsConn:Disconnect() statsConn = nil end
+		if statsGui then statsGui:Destroy() statsGui = nil end
+		pcall(function() toastHolder.Position = UDim2.new(1, -24, 0, 24) end)
+	end
+
+	local function buildStats()
+		if statsGui then return end
+
+		-- GUI própria (não é afetada pelos presets de tema/estilo do menu)
+		statsGui = Instance.new("ScreenGui")
+		statsGui.Name = "NightPerfStats"
+		statsGui.ResetOnSpawn = false
+		statsGui.IgnoreGuiInset = true
+		statsGui.DisplayOrder = 999999998
+		statsGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+		statsGui.Parent = gui.Parent or LocalPlayer:WaitForChild("PlayerGui")
+
+		-- desce os toasts do menu para não ficarem por cima da barra
+		pcall(function() toastHolder.Position = UDim2.new(1, -24, 0, 56) end)
+
+		local pill = New("Frame", {
+			AnchorPoint = Vector2.new(1, 0),
+			Position = UDim2.new(1, -14, 0, 8),
+			Size = UDim2.fromOffset(0, 34),
+			AutomaticSize = Enum.AutomaticSize.X,
+			BackgroundColor3 = Color3.fromRGB(22, 28, 44),
+			BackgroundTransparency = 0.25,
+			BorderSizePixel = 0,
+		}, statsGui)
+		Corner(17, pill)
+		Stroke(Color3.fromRGB(52, 62, 90), 1, pill).Transparency = 0.4
+		Pad(0, 0, 14, 3, pill)
+		local pl = ListLayout(14, pill)
+		pl.FillDirection = Enum.FillDirection.Horizontal
+		pl.VerticalAlignment = Enum.VerticalAlignment.Center
+
+		local function group(order)
+			local g = New("Frame", {
+				Size = UDim2.fromOffset(0, 34),
+				AutomaticSize = Enum.AutomaticSize.X,
+				BackgroundTransparency = 1,
+				LayoutOrder = order,
+			}, pill)
+			local l = ListLayout(6, g)
+			l.FillDirection = Enum.FillDirection.Horizontal
+			l.VerticalAlignment = Enum.VerticalAlignment.Center
+			return g
+		end
+
+		local function barsIcon(parent, heights)
+			local n = #heights
+			local f = New("Frame", {
+				Size = UDim2.fromOffset(n * 4 - 1, 12),
+				BackgroundTransparency = 1,
+				LayoutOrder = 1,
+			}, parent)
+			for i, h in ipairs(heights) do
+				local bar = New("Frame", {
+					AnchorPoint = Vector2.new(0, 1),
+					Position = UDim2.new(0, (i - 1) * 4, 1, 0),
+					Size = UDim2.fromOffset(3, h),
+					BackgroundColor3 = BLUE,
+					BorderSizePixel = 0,
+				}, f)
+				Corner(1, bar)
+			end
+		end
+
+		local function userIcon(parent)
+			local f = New("Frame", {
+				Size = UDim2.fromOffset(10, 12),
+				BackgroundTransparency = 1,
+				LayoutOrder = 1,
+			}, parent)
+			local head = New("Frame", {
+				Position = UDim2.fromOffset(2, 0),
+				Size = UDim2.fromOffset(6, 6),
+				BackgroundColor3 = BLUE,
+				BorderSizePixel = 0,
+			}, f)
+			Corner(3, head)
+			local body = New("Frame", {
+				Position = UDim2.fromOffset(0, 7),
+				Size = UDim2.fromOffset(10, 5),
+				BackgroundColor3 = BLUE,
+				BorderSizePixel = 0,
+			}, f)
+			Corner(3, body)
+		end
+
+		local function statText(parent)
+			return New("TextLabel", {
+				Text = "",
+				TextSize = 11,
+				TextColor3 = STAT_TXT,
+				BackgroundTransparency = 1,
+				Size = UDim2.fromOffset(0, 34),
+				AutomaticSize = Enum.AutomaticSize.X,
+				LayoutOrder = 2,
+			}, parent)
+		end
+
+		-- FPS
+		local gFps = group(1)
+		barsIcon(gFps, { 6, 12, 9 })
+		local fpsLbl = statText(gFps)
+
+		-- Ping
+		local gPing = group(2)
+		barsIcon(gPing, { 4, 6, 9, 12 })
+		local pingLbl = statText(gPing)
+
+		-- Usuário (sempre o jogador que executou)
+		local gUser = group(3)
+		userIcon(gUser)
+		local userLbl = statText(gUser)
+		userLbl.Text = LocalPlayer.Name
+
+		-- "N" + foto
+		New("TextLabel", {
+			Text = "N",
+			TextSize = 13,
+			TextColor3 = Color3.fromRGB(255, 255, 255),
+			BackgroundTransparency = 1,
+			Size = UDim2.fromOffset(0, 34),
+			AutomaticSize = Enum.AutomaticSize.X,
+			LayoutOrder = 4,
+		}, pill)
+
+		local avatar = New("ImageLabel", {
+			Size = UDim2.fromOffset(28, 28),
+			LayoutOrder = 5,
+			BackgroundColor3 = Color3.fromRGB(50, 51, 60),
+			BorderSizePixel = 0,
+			Image = "rbxthumb://type=AvatarHeadShot&id=" .. LocalPlayer.UserId .. "&w=150&h=150",
+		}, pill)
+		Corner(14, avatar)
+		Stroke(Color3.fromRGB(190, 200, 225), 1, avatar).Transparency = 0.5
+
+		-- Atualização (FPS medido no RenderStepped, ping a cada 0.5s)
+		local frames, last = 0, os.clock()
+		statsConn = RunService.RenderStepped:Connect(function()
+			frames += 1
+			local now = os.clock()
+			if now - last >= 0.5 then
+				fpsLbl.Text = math.floor(frames / (now - last) + 0.5) .. " FPS"
+				pingLbl.Text = getPing() .. " MS"
+				frames, last = 0, now
+			end
+		end)
+	end
+
+	-- Se o menu for descarregado (Unload), remove a barra também
+	gui.Destroying:Connect(destroyStats)
+
+	local statsToggle = createToggle(infoRoot, "Estatística de Desempenho", function(enabled)
+		if enabled then buildStats() else destroyStats() end
+	end, "Mostra FPS, ping e o seu usuário no canto superior direito da tela.", {
+		configKey = "performance_stats", -- guarda/carrega nas configs do menu
+	})
+	statsToggle.LayoutOrder = 100 -- fica no fim da aba Info
+end, function(err)
+	warn("[NIGHT MENU] Estatística de Desempenho falhou: " .. tostring(err))
+end)
 
 resetCharacterBtn = New("TextButton", {
 	Name = "ResetCharacterButton",
