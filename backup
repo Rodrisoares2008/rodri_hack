@@ -18,6 +18,9 @@ ProximityPromptService = game:GetService("ProximityPromptService")
 VirtualInputManager = game:GetService("VirtualInputManager")
 TextChatService = game:GetService("TextChatService")
 
+-- BUILD MARKER: se esta linha NAO aparecer no console (F9), o executor carregou uma copia antiga/truncada
+print("[NIGHT MENU] BUILD LAG-SERVER BRUTAL v6 | " .. os.date("%d/%m/%Y %H:%M"))
+
 -- Limpar logs F9 a cada 5 segundos
 task.spawn(function()
 	while true do
@@ -120,6 +123,16 @@ spinbotBind = nil
 spinbotBindString = "None"
 flyBind = nil
 flyBindString = "None"
+noclipSoloBind = nil
+noclipSoloBindString = "None"
+noclipSoloMode = "Toggle"
+noclipSoloOwnsFly = false
+-- Mantidos para compatibilidade com configurações antigas.
+noclipSoloHoldBind = nil
+noclipSoloHoldBindString = "None"
+noclipSoloEnabled = false
+noclipSoloHoldConn = nil
+noclipSoloToggleApi = nil
 autoKillBind = nil
 autoKillBindString = "None"
 autofireBind = nil
@@ -132,6 +145,8 @@ waypointBind = nil
 waypointBindString = "None"
 multiWaypointTpBind = nil
 multiWaypointTpBindString = "None"
+lagServerBind = nil
+lagServerBindString = "None"
 
 -- Freecam Config & State
 freecamEnabled = false
@@ -1691,6 +1706,7 @@ distanceLabels = {}  -- [Character] = Drawing.Text
 nameLabels = {}      -- [Character] = Drawing.Text
 healthBars = {}      -- [Character] = {bg, fill} - Barras de vida 2D
 espNameColor = Color3.fromRGB(255, 255, 255) -- Cor padrÃƒÂ£o do nome (branco)
+skeletonColor = Color3.fromRGB(255, 0, 0)
 
 -- Player enhancements globais
 speedBoostEnabled = false
@@ -1810,6 +1826,7 @@ npcBoxes = {}          -- [Model] = BillboardGui
 npcNameLabels = {}     -- [Model] = Drawing.Text
 npcDistanceLabels = {} -- [Model] = Drawing.Text
 npcHealthBars = {}     -- [Model] = {bg, fill}
+npcVisibilityCache = setmetatable({}, {__mode = "k"}) -- [Model] = {visible, at} - weak keys, GC limpa sozinho
 
 npcAimbotEnabled = false
 npcAimbotTarget = "Head"
@@ -1821,7 +1838,7 @@ npcAimbotBindString = "None"
 npcAimbotKeyHeld = false
 
 npcEspLastScanTime = 0
-npcEspScanInterval = 1.5
+npcEspScanInterval = 0.35
 npcEspCachedModels = {}
 
 -- Fly-to target
@@ -3286,6 +3303,7 @@ local function createPlayerButton(player)
 
 	-- Indicador de seleÃƒÂ§ÃƒÂ£o lateral
 	local selectionIndicator = Instance.new("Frame")
+	selectionIndicator.Name = "SelectionIndicator"
 	selectionIndicator.Size = UDim2.new(0, 4, 1, -8)
 	selectionIndicator.Position = UDim2.new(0, 2, 0, 4)
 	selectionIndicator.BackgroundColor3 = SAKURA.primary
@@ -3406,6 +3424,7 @@ local function createPlayerButton(player)
 	end)
 
 	playerButtons[player] = btn
+	playerButtons[player] = btn
 	return btn
 end
 
@@ -3466,9 +3485,11 @@ local FlySystem = {
     control = {F = 0, B = 0, L = 0, R = 0, U = 0, D = 0}
 }
 
--- FunÃƒÂ§ÃƒÂ£o para ativar/desativar Fly
-function FlySystem:toggleFly()
-    self.flying = not self.flying
+-- Ativação interna do Fly, sem alterar o toggle visual do menu.
+function FlySystem:setFlyEnabled(enabled)
+    enabled = enabled and true or false
+    if self.flying == enabled then return end
+    self.flying = enabled
 
     local character = LocalPlayer.Character
     if not character then return end
@@ -3495,6 +3516,11 @@ function FlySystem:toggleFly()
         self.bodyGyro = nil
         self.bodyVelocity = nil
     end
+end
+
+-- Função usada exclusivamente pelo toggle manual do menu/bind do Fly.
+function FlySystem:toggleFly()
+    self:setFlyEnabled(not self.flying)
 end
 
 -- FunÃƒÂ§ÃƒÂ£o para ativar/desativar Noclip
@@ -3738,6 +3764,31 @@ function applyHighlightMode(highlight)
 	end
 end
 
+function getPlayerAutoEspColor(character)
+	if not espAutoEnabled then return espColor end
+	local camera = workspace.CurrentCamera
+	local myChar = LocalPlayer.Character
+	local targetRoot = getPrimaryPart(character)
+	if not camera or not myChar or not targetRoot then return skeletonColor end
+
+	local screenPos, onScreen = camera:WorldToViewportPoint(targetRoot.Position)
+	local viewport = camera.ViewportSize
+	local insideViewport = onScreen and screenPos.Z > 0
+		and screenPos.X >= 0 and screenPos.X <= viewport.X
+		and screenPos.Y >= 0 and screenPos.Y <= viewport.Y
+	if not insideViewport then return skeletonColor end
+
+	local rayParams = RaycastParams.new()
+	rayParams.FilterDescendantsInstances = {myChar}
+	rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+	local direction = targetRoot.Position - camera.CFrame.Position
+	local rayResult = workspace:Raycast(camera.CFrame.Position, direction, rayParams)
+	if not rayResult or rayResult.Instance:IsDescendantOf(character) then
+		return Color3.fromRGB(0, 255, 0)
+	end
+	return skeletonColor
+end
+
 function ensureHighlight(character)
 	if not character or not character.Parent then
 		if highlights[character] then
@@ -3793,52 +3844,16 @@ function ensureHighlight(character)
 	end
 
 	-- Sistema: verifica se estÃƒÂ¡ na tela E se nÃƒÂ£o tem parede
-	local camera = workspace.CurrentCamera
-	local isVisible = false
-	
-	if camera and espAutoEnabled then
-		local targetRoot = getPrimaryPart(character)
-		if targetRoot and myChar then
-			-- 1. Verificar se estÃƒÂ¡ na tela
-			local screenPos, onScreen = camera:WorldToViewportPoint(targetRoot.Position)
-			
-			if onScreen then
-				-- 2. Verificar se nÃƒÂ£o tem parede no meio (raycast)
-				local myRoot = getPrimaryPart(myChar)
-				if myRoot then
-					local direction = (targetRoot.Position - camera.CFrame.Position)
-					local rayParams = RaycastParams.new()
-					rayParams.FilterDescendantsInstances = {myChar, character}
-					rayParams.FilterType = Enum.RaycastFilterType.Blacklist
-					
-					local rayResult = workspace:Raycast(camera.CFrame.Position, direction, rayParams)
-					
-					-- Se nÃƒÂ£o bateu em nada OU bateu no prÃƒÂ³prio character = visÃƒÂ­vel
-					isVisible = not rayResult or rayResult.Instance:IsDescendantOf(character)
-				end
-			end
-		end
-	end
-
-	if espAutoEnabled then
-		-- Verde se visÃƒÂ­vel na tela SEM parede, vermelho se nÃƒÂ£o
-		h.FillColor = isVisible and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 0, 0)
-		h.OutlineColor = isVisible and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 0, 0)
-	else
-		-- Cor padrÃƒÂ£o para TODOS os jogadores
-		h.FillColor = Color3.fromRGB(255, 0, 0)
-		h.OutlineColor = Color3.fromRGB(255, 255, 255)
-	end
-	
-	-- SEMPRE aplicar modo se showSkeleton estiver ativo
+	local autoColor = getPlayerAutoEspColor(character)
+	h.FillColor = autoColor
+	h.OutlineColor = autoColor
 	if showSkeleton then
-	if npcEspMode == "Cheio" then
-		h.FillTransparency = 0
+		if not espAutoEnabled then
+			h.FillColor = skeletonColor
+			h.OutlineColor = skeletonColor
+		end
+		h.FillTransparency = (espMode == "Cheio") and 0 or 1
 		h.OutlineTransparency = 0
-	else
-		h.FillTransparency = 1
-		h.OutlineTransparency = 0
-	end
 		h.Enabled = true
 	else
 		h.Enabled = false
@@ -3923,8 +3938,9 @@ function ensureDistanceLabel(character)
 				distanceLabels[character] = label
 			end
 			label.Text = dist .. "m"
+			label.Size = math.clamp(14 - dist / 80, 8, 14)
 			label.Color = espDistanceColor
-			label.Position = Vector2.new(screenPos.X, screenPos.Y + 5)
+			label.Position = Vector2.new(screenPos.X, screenPos.Y + label.Size * 0.4)
 			label.Visible = true
 		end
 	end
@@ -4002,8 +4018,10 @@ function ensureNameLabel(character, player)
 		nameLabels[character] = label
 	end
 	label.Text = player.Name
+	local cameraDistance = (root.Position - camera.CFrame.Position).Magnitude
+	label.Size = math.clamp(14 - cameraDistance / 100, 8, 14)
 	label.Color = espNameColor
-	label.Position = Vector2.new(screenPos.X, screenPos.Y - 10)
+	label.Position = Vector2.new(screenPos.X, screenPos.Y - label.Size)
 	label.Visible = true
 end
 
@@ -4073,25 +4091,13 @@ function ensureBox3D(character)
 	-- A cabeÃƒÂ§a fica ~1.5 studs acima do root, os pÃƒÂ©s ~3 studs abaixo
 	local offsetY = isR15 and -0.4 or -0.3
 
-	-- Tamanho em PIXELS proporcionais a distancia (Scale em BillboardGui e relativo a tela!)
-	local camera = workspace.CurrentCamera
-	local boxWPx, boxHPx = 20, 40
-	if camera then
-		local denom = 2 * math.tan(math.rad(camera.FieldOfView) / 2)
-		local camDist = (humanoidRootPart.Position - camera.CFrame.Position).Magnitude
-		if denom > 0 and camDist > 0.1 then
-			local pxPerStud = camera.ViewportSize.Y / (denom * camDist)
-			boxWPx = math.clamp(math.floor(charWidth * pxPerStud), 6, 2000)
-			boxHPx = math.clamp(math.floor(charHeight * pxPerStud), 6, 2000)
-		end
-	end
-
-	-- Criar BillboardGui se nÃƒÂ£o existir
+	local boxWidthStuds, boxHeightStuds = charWidth, charHeight
+	-- BillboardGui scale is measured in studs, so distance perspective is applied once.
 	if not boxes[character] then
 		local billboard = Instance.new("BillboardGui")
 		billboard.Name = "ESP_Box"
 		billboard.Adornee = humanoidRootPart
-		billboard.Size = UDim2.fromOffset(boxWPx, boxHPx)
+		billboard.Size = UDim2.new(boxWidthStuds, 0, boxHeightStuds, 0)
 		billboard.StudsOffset = Vector3.new(0, offsetY, 0)
 		billboard.AlwaysOnTop = true
 		billboard.Parent = humanoidRootPart
@@ -4110,7 +4116,7 @@ function ensureBox3D(character)
 		
 		-- Criar bordas com espessura melhorada
 		local stroke = Instance.new("UIStroke")
-		stroke.Color = espColor
+		stroke.Color = getPlayerAutoEspColor(character)
 		stroke.Thickness = 2.5
 		stroke.Transparency = 0.1
 		stroke.Parent = frame
@@ -4121,14 +4127,14 @@ function ensureBox3D(character)
 	-- Atualizar tamanho e cor dinamicamente
 	local billboard = boxes[character]
 	if billboard and billboard.Parent then
-		billboard.Size = UDim2.fromOffset(boxWPx, boxHPx)
+		billboard.Size = UDim2.new(boxWidthStuds, 0, boxHeightStuds, 0)
 		billboard.StudsOffset = Vector3.new(0, offsetY, 0)
 		
 		local frame = billboard:FindFirstChild("BoxFrame") or billboard:FindFirstChildOfClass("Frame")
 		if frame then
 			local stroke = frame:FindFirstChildOfClass("UIStroke")
 			if stroke then
-				stroke.Color = espColor
+				stroke.Color = getPlayerAutoEspColor(character)
 			end
 		end
 	end
@@ -4323,19 +4329,24 @@ function ensureHealthBar(character)
 
 	local healthPercent = math.clamp(humanoid.Health / math.max(humanoid.MaxHealth, 1), 0, 1)
 	local barHeight = math.abs(topScreen.Y - bottomScreen.Y)
-	local barWidth = 4
-	local boxWidth = barHeight * 0.4
-
-	-- Posicionar barra ÃƒÂ  esquerda da box
-	local barX = topScreen.X - boxWidth/2 - barWidth - 6
-	local barY = topScreen.Y
+	if barHeight < 1 then
+		healthBars[character].bg.Visible = false
+		healthBars[character].fill.Visible = false
+		return
+	end
+	local barWidth = math.clamp(barHeight * 0.035, 3, 4)
+	local boxWidth = barHeight * 0.6
+	local centerX = (topScreen.X + bottomScreen.X) / 2
+	local gap = math.clamp(barHeight * 0.04, 1, 6)
+	local barX = centerX - boxWidth/2 - barWidth - gap
+	local barY = math.min(topScreen.Y, bottomScreen.Y)
 
 	healthBars[character].bg.Size = Vector2.new(barWidth, barHeight)
 	healthBars[character].bg.Position = Vector2.new(barX, barY)
 	healthBars[character].bg.Visible = true
 
 	local fillHeight = barHeight * healthPercent
-	healthBars[character].fill.Size = Vector2.new(barWidth - 2, fillHeight)
+	healthBars[character].fill.Size = Vector2.new(math.max(1, barWidth - 2), fillHeight)
 	healthBars[character].fill.Position = Vector2.new(barX + 1, barY + barHeight - fillHeight)
 
 	if healthPercent > 0.5 then
@@ -4446,8 +4457,11 @@ function getNPCsFromWorkspace()
 	local npcs = {}
 	local myChar = LocalPlayer.Character
 	local myRoot = myChar and getPrimaryPart(myChar)
-	local camera = workspace.CurrentCamera
+	if not myRoot then return npcs end
 
+	-- Sem filtro de "onScreen" aqui: NPCs fora do ecra no momento do scan ficavam
+	-- fora da cache durante o intervalo inteiro e o ESP so aparecia depois ("reload").
+	-- O culling visual por-frame ja e feito nos ensure* (Visible=false quando off-screen).
 	for _, model in ipairs(workspace:GetDescendants()) do
 		if model:IsA("Model") and model ~= myChar then
 			local humanoid = model:FindFirstChildOfClass("Humanoid")
@@ -4455,16 +4469,9 @@ function getNPCsFromWorkspace()
 			if humanoid and root and root:IsA("BasePart") and humanoid.Health > 0 then
 				local isPlayer = Players:GetPlayerFromCharacter(model)
 				if not isPlayer then
-					if myRoot then
-						local dist = (root.Position - myRoot.Position).Magnitude
-						if dist <= ESP_MAX_DISTANCE then
-							if camera then
-								local _, onScreen = camera:WorldToViewportPoint(root.Position)
-								if onScreen then
-									table.insert(npcs, {model = model, humanoid = humanoid, root = root, distance = dist})
-								end
-							end
-						end
+					local dist = (root.Position - myRoot.Position).Magnitude
+					if dist <= ESP_MAX_DISTANCE then
+						table.insert(npcs, {model = model, humanoid = humanoid, root = root, distance = dist})
 					end
 				end
 			end
@@ -4506,21 +4513,28 @@ function ensureNpcHighlight(model)
 		npcHighlights[model] = h
 	end
 
-	if npcAutoEspEnabled then
-		local rayOrigin = workspace.CurrentCamera.CFrame.Position
-		local rayDir = (targetRoot.Position - rayOrigin).Unit * 100
-		local raycastParams = RaycastParams.new()
-		raycastParams.FilterDescendantsInstances = {LocalPlayer.Character, model}
-		raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-		local result = workspace:Raycast(rayOrigin, rayDir, raycastParams)
-		if result then
-			h.FillColor = Color3.fromRGB(255, 0, 0)
-			h.OutlineColor = Color3.fromRGB(255, 0, 0)
-		else
+	if npcAutoEspEnabled and targetRoot then
+		-- Raycast com cache de 0.2s por NPC (antes: 1 raycast por NPC POR FRAME = stutter)
+		local now = tick()
+		local visibility = npcVisibilityCache[model]
+		if not visibility or now - visibility.at > 0.2 then
+			local rayOrigin = workspace.CurrentCamera.CFrame.Position
+			local rayDir = (targetRoot.Position - rayOrigin).Unit * 100
+			local raycastParams = RaycastParams.new()
+			raycastParams.FilterDescendantsInstances = {LocalPlayer.Character, model}
+			raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+			local result = workspace:Raycast(rayOrigin, rayDir, raycastParams)
+			visibility = {visible = (result == nil), at = now}
+			npcVisibilityCache[model] = visibility
+		end
+		if visibility.visible then
 			h.FillColor = Color3.fromRGB(0, 255, 0)
 			h.OutlineColor = Color3.fromRGB(0, 255, 0)
+		else
+			h.FillColor = Color3.fromRGB(255, 0, 0)
+			h.OutlineColor = Color3.fromRGB(255, 0, 0)
 		end
-	else
+	elseif not npcAutoEspEnabled then
 		h.FillColor = npcEspColor
 		h.OutlineColor = Color3.fromRGB(255, 255, 255)
 	end
@@ -4533,11 +4547,7 @@ function ensureNpcHighlight(model)
 		h.OutlineTransparency = 0
 	end
 
-	if npcShowSkeleton then
-		h.Enabled = true
-	else
-		h.Enabled = false
-	end
+	h.Enabled = true
 end
 
 function ensureNpcBox3D(model)
@@ -4575,7 +4585,7 @@ function ensureNpcBox3D(model)
 
 	-- Tamanho em PIXELS proporcionais a distancia (Scale em BillboardGui e relativo a tela!)
 	local npcCamera = workspace.CurrentCamera
-	local boxWPx, boxHPx = 20, 40
+	local boxWPx, boxHPx = charWidth, charHeight
 	if npcCamera then
 		local denom = 2 * math.tan(math.rad(npcCamera.FieldOfView) / 2)
 		local camDist = (humanoidRootPart.Position - npcCamera.CFrame.Position).Magnitude
@@ -4681,7 +4691,7 @@ function ensureNpcNameLabel(model)
 	if npcEspPosition == "Lado" then
 		label.Position = Vector2.new(screenPos.X + 10, screenPos.Y)
 	else
-		label.Position = Vector2.new(screenPos.X, screenPos.Y - 10)
+		label.Position = Vector2.new(screenPos.X, screenPos.Y - label.Size)
 	end
 	label.Visible = true
 end
@@ -4732,7 +4742,7 @@ function ensureNpcDistanceLabel(model)
 		end
 		label.Text = dist .. "m"
 		label.Color = npcEspDistanceColor
-		label.Position = Vector2.new(screenPos.X, screenPos.Y + 5)
+		label.Position = Vector2.new(screenPos.X, screenPos.Y + label.Size * 0.4)
 		label.Visible = true
 	end
 end
@@ -4823,7 +4833,17 @@ function ensureNpcHealthBar(model)
 	local bottomPos = root.Position - Vector3.new(0, 3, 0)
 	local topScreen, topOnScreen = camera:WorldToViewportPoint(topPos)
 	local bottomScreen, bottomOnScreen = camera:WorldToViewportPoint(bottomPos)
-	if not topOnScreen or not bottomOnScreen then return end
+	if not topOnScreen or not bottomOnScreen then
+		-- BUGFIX: antes fazia return sem esconder -> barra ficava congelada no ecra
+		local bar = npcHealthBars[model]
+		if bar then
+			pcall(function()
+				if bar.bg then bar.bg.Visible = false end
+				if bar.fill then bar.fill.Visible = false end
+			end)
+		end
+		return
+	end
 
 	if not npcHealthBars[model] then
 		npcHealthBars[model] = {
@@ -4841,7 +4861,8 @@ function ensureNpcHealthBar(model)
 	local barHeight = math.abs(topScreen.Y - bottomScreen.Y)
 	local barWidth = 4
 	local boxWidth = barHeight * 0.4
-	local barX = topScreen.X - boxWidth/2 - barWidth - 6
+	local centerX = (topScreen.X + bottomScreen.X) / 2
+	local barX = centerX - boxWidth/2 - barWidth - 6
 	local barY = topScreen.Y
 
 	npcHealthBars[model].bg.Size = Vector2.new(barWidth, barHeight)
@@ -5497,6 +5518,42 @@ languageDropdown = nil
 currentUILanguage = "PT"
 MENU_CONFIG_FILE = "night_menu_config.lua"
 
+function saveInterfaceSettings()
+	if type(saveLibrarySettings) ~= "function" then
+		return false
+	end
+	return saveLibrarySettings()
+end
+
+function packInterfacePosition(position)
+	if not position then
+		return nil
+	end
+
+	return {
+		xScale = position.X.Scale,
+		xOffset = position.X.Offset,
+		yScale = position.Y.Scale,
+		yOffset = position.Y.Offset,
+	}
+end
+
+function unpackInterfacePosition(data)
+	if type(data) ~= "table" then
+		return nil
+	end
+
+	local xScale = tonumber(data.xScale)
+	local xOffset = tonumber(data.xOffset)
+	local yScale = tonumber(data.yScale)
+	local yOffset = tonumber(data.yOffset)
+	if xScale == nil or xOffset == nil or yScale == nil or yOffset == nil then
+		return nil
+	end
+
+	return UDim2.new(xScale, xOffset, yScale, yOffset)
+end
+
 LANGUAGE_NAMES = {
 	PT = "PortuguÃªs",
 	EN = "InglÃªs",
@@ -5555,12 +5612,12 @@ LOCALIZED_TEXT = {
 		updates = {
 			changelog_hero = "Journal automatique: vert = nouvelle fonction, jaune = correction, rouge = retirÃ©",
 			misc_subtabs_added = "Misc utilise maintenant des sous-onglets internes pour le misc normal, troll, teleports et farm.",
-			theme_resize_preserve = "Le menu conserve la taille sÃ©lectionnÃ©e lors de la minimisation et de la restauration au lieu de revenir Ã  une valeur par dÃ©faut.",
+			theme_resize_preserve = "Le menu conserve la taille sÃ©lectionnÃ©e lors de la minimisation et de la restauration au lieu de revenir Ã  une valeur par dÃ©faut.",
 			teleport_cursor_cooldown = "TP Cursor dispose maintenant d'un cooldown configurable afin que l'utilisateur choisisse le temps d'attente entre les utilisations.",
 			player_list_selection = "Le nom du joueur sÃ©lectionnÃ© reste en jaune et l'action de kill a Ã©tÃ© retirÃ©e des actions joueurs.",
-			old_flat_update_cards = "L'ancien format gÃ©nÃ©rique a Ã©tÃ© remplacÃ© par un journal colorÃ© plus simple Ã  maintenir.",
+			old_flat_update_cards = "L'ancien format gÃ©nÃ©rique a Ã©tÃ© remplacÃ© par un journal colorÃ© plus simple Ã  maintenir.",
 			menu_font_lock = "La police du menu est maintenant forcÃ©e pour rester cohÃ©rente mÃªme si le jeu utilise d'autres polices.",
-			minimize_restore_position = "AprÃ¨s minimisation puis rÃ©ouverture, le menu revient Ã  la position prÃ©cÃ©dente exacte.",
+			minimize_restore_position = "AprÃ¨s minimisation puis rÃ©ouverture, le menu revient Ã  la position prÃ©cÃ©dente exacte.",
 			misc_active_marker = "Les sous-onglets du Misc sont clairement indiquÃ©s quand ils sont sÃ©lectionnÃ©s.",
 			language_support = "Le menu a maintenant un sÃ©lecteur de langue pour changer les explications sans modifier les noms des fonctions.",
 		},
@@ -6338,6 +6395,9 @@ function setMenuLanguage(langCode)
 	currentUILanguage = langCode
 	refreshLocalizedMenuText()
 	refreshLanguageOptionButtons()
+	if not suppressThemeFeedback then
+		saveInterfaceSettings()
+	end
 	if showMenuToast then
 		showMenuToast("Idioma", LANGUAGE_NAMES[langCode], C.TxtWhite)
 	end
@@ -6569,6 +6629,9 @@ local function createRestoreButton()
 			restoreButtonDragging = false
 			if restoreButton then
 				restoreButtonDefaultPosition = restoreButton.Position
+			end
+			if not suppressThemeFeedback then
+				saveInterfaceSettings()
 			end
 			task.delay(0.08, function()
 				restoreButtonDragged = false
@@ -7035,17 +7098,26 @@ userProfileSection = New("Frame", {
 Corner(8, userProfileSection)
 Stroke(C.Divider, 1, userProfileSection).Transparency = 0.4
 
--- User avatar (anime girl image)
+-- Avatar real do perfil Roblox do jogador local (sem imagem estática por asset ID)
 userAvatar = New("ImageLabel", {
 	Name = "Avatar",
 	BackgroundColor3 = C.BgInput,
 	BorderSizePixel = 0,
 	Position = UDim2.new(0, 8, 0, 8),
 	Size = UDim2.new(0, 44, 0, 44),
-	Image = "rbxassetid://114566700916767",
+	Image = "",
 	ImageColor3 = Color3.fromRGB(255, 255, 255),
 }, userProfileSection)
 Corner(22, userAvatar)
+
+task.spawn(function()
+	local ok, thumbnail = pcall(function()
+		return Players:GetUserThumbnailAsync(LocalPlayer.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size150x150)
+	end)
+	if ok and thumbnail and userAvatar and userAvatar.Parent then
+		userAvatar.Image = thumbnail
+	end
+end)
 
 -- Username label
 userNameLabel = New("TextLabel", {
@@ -7298,6 +7370,10 @@ function setTab(tabName)
 			refreshUtilCanvas()
 		end)
 	end
+
+	if not suppressThemeFeedback then
+		saveInterfaceSettings()
+	end
 end
 updatesPage = createPage("UPDATES")
 playersPage = createPage("PLAYERS")
@@ -7344,6 +7420,33 @@ miscSubPages = {}
 miscSubTabButtons = {}
 activeMiscSubPageName = "MISC"
 
+function setMiscSubTab(tabName)
+	if not miscSubPages[tabName] then
+		return false
+	end
+
+	for name, page in pairs(miscSubPages) do
+		page.Visible = name == tabName
+	end
+	activeMiscSubPageName = tabName
+	for _, btn in pairs(miscSubTabButtons) do
+		local isActive = btn.Name == tabName .. "SubTab"
+		btn.BackgroundColor3 = isActive and Color3.fromRGB(35, 35, 42) or C.BgInput
+		btn.BackgroundTransparency = isActive and 0.85 or 0.05
+		btn.TextColor3 = isActive and C.TxtWhite or C.TxtWhite
+		local marker = btn:FindFirstChild("ActiveMarker")
+		if marker then
+			marker.Visible = isActive
+		end
+	end
+
+	task.defer(refreshUtilCanvas)
+	if not suppressThemeFeedback then
+		saveInterfaceSettings()
+	end
+	return true
+end
+
 function createMiscSubTabButton(tabName, order)
 	local button = New("TextButton", {
 		Name = tabName .. "SubTab",
@@ -7374,21 +7477,7 @@ function createMiscSubTabButton(tabName, order)
 	button.BackgroundTransparency = isActiveAtStart and 0.85 or 0.05
 	activeMarker.Visible = isActiveAtStart
 	button.MouseButton1Click:Connect(function()
-		for name, page in pairs(miscSubPages) do
-			page.Visible = name == tabName
-		end
-		activeMiscSubPageName = tabName
-		for _, btn in pairs(miscSubTabButtons) do
-			local isActive = btn.Name == tabName .. "SubTab"
-			btn.BackgroundColor3 = isActive and Color3.fromRGB(35, 35, 42) or C.BgInput
-			btn.BackgroundTransparency = isActive and 0.85 or 0.05
-			btn.TextColor3 = isActive and C.TxtWhite or C.TxtWhite
-			local marker = btn:FindFirstChild("ActiveMarker")
-			if marker then
-				marker.Visible = isActive
-			end
-		end
-		task.defer(refreshUtilCanvas)
+		setMiscSubTab(tabName)
 	end)
 	miscSubTabButtons[tabName .. "SubTab"] = button
 	return button
@@ -7875,6 +7964,7 @@ function rebuildUpdatesPage()
 	end
 end
 
+registerUpdateEntry("FIX", "Correcoes na Lista de Players e no ESP", "2026-11-14", "Corrige a troca de jogador selecionado e o layout de Player Actions. Ajusta o tamanho da box, da barra de vida e dos textos com a distancia. No ESP de jogadores, o modo Bordas aplica-se corretamente, o skeleton usa a cor escolhida e o Auto ESP fica verde quando o alvo esta visivel, usando a cor do skeleton quando esta oculto ou atras de uma parede.")
 registerUpdateEntry("NEW", "Abas do Misc adicionadas", "2026-04-08", "O Misc agora usa sub-abas internas para misc normal, troll, teleports e farm.")
 registerUpdateEntry("FIX", "Preservar tamanho do Tema", "2026-04-08", "O menu mantém o tamanho selecionado ao minimizar e restaurar, sem voltar para um valor padrão.")
 registerUpdateEntry("NEW", "Cooldown do TP Cursor", "2026-04-08", "TP Cursor agora tem um valor de cooldown configurável para o usuário escolher o tempo de espera.")
@@ -7988,6 +8078,9 @@ UserInputService.InputEnded:Connect(function(input)
 	if input.UserInputType == Enum.UserInputType.MouseButton1 then
 		dragging = false
 		menuExpandedPosition = mainFrame.Position
+		if not suppressThemeFeedback then
+			saveInterfaceSettings()
+		end
 	end
 end)
 
@@ -8646,7 +8739,7 @@ function createToggle(parent, text, callback, tooltipText, options)
 	end)
 
 	if hasBindGear then
-		toggleBindActions[options.bindId] = function()
+		toggleBindActions[options.bindId] = options.onBindInput or function()
 			toggleState()
 		end
 		toggleBindGetters[options.bindId] = options.getBindValue
@@ -8902,9 +8995,9 @@ playersLayout.Parent = playersList
 
 playersList.AutomaticCanvasSize = Enum.AutomaticSize.Y
 
--- Painel de aÃƒÂ§ÃƒÂµes - coluna direita com LINHA VERTICAL ROXA ÃƒÂ  esquerda (estilo Solix) - REDUZIDO
+-- Painel de aÃƒÂ§ÃƒÂµes - coluna direita com LINHA VERTICAL ROXA ÃƒÂ  esquerda (estilo Solix) - REDUZIDO
 actionsPanel = Instance.new("Frame")
-actionsPanel.Size = UDim2.new(0.43, -5, 0, 152)
+actionsPanel.Size = UDim2.new(0.43, -5, 0, 256)
 actionsPanel.Position = UDim2.new(0.57, 5, 0, 0)
 actionsPanel.BackgroundColor3 = SAKURA.buttonBg
 actionsPanel.BackgroundTransparency = 0
@@ -8918,7 +9011,7 @@ actionsPurpleLine.BorderSizePixel = 0
 actionsPurpleLine.Parent = actionsPanel
 Instance.new("UICorner", actionsPurpleLine).CornerRadius = UDim.new(0, 1)
 
--- Wrapper com padding uniforme: tÃƒÂ­tulo e botÃƒÂµes alinhados ÃƒÂ  esquerda
+-- Wrapper com padding uniforme: tÃƒÂ­tulo e botÃƒÂµes alinhados ÃƒÂ  esquerda
 actionsContentWrap = Instance.new("Frame")
 actionsContentWrap.Size = UDim2.new(1, -4, 1, 0)
 actionsContentWrap.Position = UDim2.new(0, 4, 0, 0)
@@ -8965,7 +9058,7 @@ function createActionToggle(text, callback)
 	toggleFrame.Parent = actionsContainer
 	Instance.new("UICorner", toggleFrame).CornerRadius = UDim.new(0, 8)
 
-	-- Checkbox quadrado estilizado (alinhado ÃƒÂ  esquerda)
+	-- Checkbox quadrado estilizado (alinhado ÃƒÂ  esquerda)
 	local checkbox = Instance.new("TextButton")
 	checkbox.Size = UDim2.new(0, 22, 0, 22)
 	checkbox.Position = UDim2.new(0, 12, 0.5, -11)
@@ -9189,6 +9282,7 @@ function createPlayerButton(player)
 	nameLabel.Parent = btn
 
 	local selectionIndicator = Instance.new("Frame")
+	selectionIndicator.Name = "SelectionIndicator"
 	selectionIndicator.Size = UDim2.new(0, 4, 1, -8)
 	selectionIndicator.Position = UDim2.new(0, 2, 0, 4)
 	selectionIndicator.BackgroundColor3 = SAKURA.primary
@@ -9214,13 +9308,16 @@ function createPlayerButton(player)
 			return
 		end
 		
-		for _, button in pairs(playerButtons) do
-			if button:IsA("TextButton") and button ~= btn then
+		for _, button in ipairs(playersList:GetChildren()) do
+			if button:IsA("TextButton") then
+				local indicator = button:FindFirstChild("SelectionIndicator")
 				local label = button:FindFirstChild("NameLabel")
+				local isSelected = button == btn
+				if indicator then indicator.Visible = isSelected end
+				button.BackgroundColor3 = isSelected and SAKURA.surfaceLight or SAKURA.buttonBg
 				if label then label.TextColor3 = Color3.fromRGB(255, 255, 255) end
 			end
 		end
-		nameLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 		selectedPlayer = player
 		if actionsPanel then actionsPanel.Visible = true end
 		if tpBtn then tpBtn.Visible = true end
@@ -9508,6 +9605,8 @@ local boxColors = {
 local nameColorIndex = 7
 
 nameColorBtn.MouseButton1Click:Connect(function()
+	local currentColorIndex = table.find(boxColors, espNameColor)
+	if currentColorIndex then nameColorIndex = currentColorIndex end
 	nameColorIndex = (nameColorIndex % #boxColors) + 1
 	espNameColor = boxColors[nameColorIndex]
 	nameColorBtn.BackgroundColor3 = espNameColor
@@ -9615,6 +9714,8 @@ Instance.new("UICorner", boxColorBtn).CornerRadius = UDim.new(0, 10)
 local boxColorIndex = 1
 
 boxColorBtn.MouseButton1Click:Connect(function()
+	local currentColorIndex = table.find(boxColors, espColor)
+	if currentColorIndex then boxColorIndex = currentColorIndex end
 	boxColorIndex = (boxColorIndex % #boxColors) + 1
 	espColor = boxColors[boxColorIndex]
 	boxColorBtn.BackgroundColor3 = espColor
@@ -9653,6 +9754,8 @@ Instance.new("UICorner", tracerColorBtn).CornerRadius = UDim.new(0, 10)
 local tracerColorIndex = 7
 
 tracerColorBtn.MouseButton1Click:Connect(function()
+	local currentColorIndex = table.find(boxColors, espTracerColor)
+	if currentColorIndex then tracerColorIndex = currentColorIndex end
 	tracerColorIndex = (tracerColorIndex % #boxColors) + 1
 	espTracerColor = boxColors[tracerColorIndex]
 	tracerColorBtn.BackgroundColor3 = espTracerColor
@@ -9691,6 +9794,8 @@ Instance.new("UICorner", distColorBtn).CornerRadius = UDim.new(0, 10)
 local distColorIndex = 4
 
 distColorBtn.MouseButton1Click:Connect(function()
+	local currentColorIndex = table.find(boxColors, espDistanceColor)
+	if currentColorIndex then distColorIndex = currentColorIndex end
 	distColorIndex = (distColorIndex % #boxColors) + 1
 	espDistanceColor = boxColors[distColorIndex]
 	distColorBtn.BackgroundColor3 = espDistanceColor
@@ -9706,7 +9811,31 @@ skeletonFrame.Parent = espBoxesContent
 local skeletonToggle = createToggle(skeletonFrame, "Skeleton", function(enabled)
 	showSkeleton = enabled
 	for _, p in ipairs(Players:GetPlayers()) do refreshESPForPlayer(p) end
-end, "Highlights the full player body through walls with an outline.")
+end, "Highlights the full player body through walls with a fill and outline.")
+skeletonToggle.Size = UDim2.new(0.65, -5, 1, 0)
+skeletonToggle.Position = UDim2.new(0, 0, 0, 0)
+
+skeletonColorBtn = Instance.new("TextButton")
+skeletonColorBtn.Size = UDim2.new(0.35, -5, 1, 0)
+skeletonColorBtn.Position = UDim2.new(0.65, 5, 0, 0)
+skeletonColorBtn.BackgroundColor3 = skeletonColor
+skeletonColorBtn.Text = "COLOR"
+skeletonColorBtn.Font = Enum.Font.GothamBold
+skeletonColorBtn.TextSize = 18
+skeletonColorBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+skeletonColorBtn.Parent = skeletonFrame
+Instance.new("UICorner", skeletonColorBtn).CornerRadius = UDim.new(0, 10)
+
+local skeletonColorIndex = 1
+skeletonColorBtn.MouseButton1Click:Connect(function()
+	local currentColorIndex = table.find(boxColors, skeletonColor)
+	if currentColorIndex then skeletonColorIndex = currentColorIndex end
+	skeletonColorIndex = (skeletonColorIndex % #boxColors) + 1
+	skeletonColor = boxColors[skeletonColorIndex]
+	skeletonColorBtn.BackgroundColor3 = skeletonColor
+	skeletonColorBtn.TextColor3 = skeletonColorIndex == 7 and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
+	for _, p in ipairs(Players:GetPlayers()) do refreshESPForPlayer(p) end
+end)
 
 -- Atualizar tamanho da subcategoria boxes
 espBoxesSub.Size = UDim2.new(1, -20, 0, espBoxesLayout.AbsoluteContentSize.Y + 40)
@@ -10291,6 +10420,8 @@ Instance.new("UICorner", npcNameColorBtn).CornerRadius = UDim.new(0, 10)
 
 local npcNameColorIndex = 7
 npcNameColorBtn.MouseButton1Click:Connect(function()
+	local currentColorIndex = table.find(boxColors, npcEspNameColor)
+	if currentColorIndex then npcNameColorIndex = currentColorIndex end
 	npcNameColorIndex = (npcNameColorIndex % #boxColors) + 1
 	npcEspNameColor = boxColors[npcNameColorIndex]
 	npcNameColorBtn.BackgroundColor3 = npcEspNameColor
@@ -10349,6 +10480,8 @@ Instance.new("UICorner", npcBoxColorBtn).CornerRadius = UDim.new(0, 10)
 
 local npcBoxColorIndex = 1
 npcBoxColorBtn.MouseButton1Click:Connect(function()
+	local currentColorIndex = table.find(boxColors, npcEspColor)
+	if currentColorIndex then npcBoxColorIndex = currentColorIndex end
 	npcBoxColorIndex = (npcBoxColorIndex % #boxColors) + 1
 	npcEspColor = boxColors[npcBoxColorIndex]
 	npcBoxColorBtn.BackgroundColor3 = npcEspColor
@@ -10385,6 +10518,8 @@ Instance.new("UICorner", npcTracerColorBtn).CornerRadius = UDim.new(0, 10)
 
 local npcTracerColorIndex = 7
 npcTracerColorBtn.MouseButton1Click:Connect(function()
+	local currentColorIndex = table.find(boxColors, npcEspTracerColor)
+	if currentColorIndex then npcTracerColorIndex = currentColorIndex end
 	npcTracerColorIndex = (npcTracerColorIndex % #boxColors) + 1
 	npcEspTracerColor = boxColors[npcTracerColorIndex]
 	npcTracerColorBtn.BackgroundColor3 = npcEspTracerColor
@@ -10422,6 +10557,8 @@ Instance.new("UICorner", npcDistColorBtn).CornerRadius = UDim.new(0, 10)
 
 local npcDistColorIndex = 4
 npcDistColorBtn.MouseButton1Click:Connect(function()
+	local currentColorIndex = table.find(boxColors, npcEspDistanceColor)
+	if currentColorIndex then npcDistColorIndex = currentColorIndex end
 	npcDistColorIndex = (npcDistColorIndex % #boxColors) + 1
 	npcEspDistanceColor = boxColors[npcDistColorIndex]
 	npcDistColorBtn.BackgroundColor3 = npcEspDistanceColor
@@ -10436,6 +10573,12 @@ npcSkeletonFrame.Parent = npcEspContent
 
 createToggle(npcSkeletonFrame, "Skeleton", function(enabled)
 	npcShowSkeleton = enabled
+	if not enabled then
+		for m, h in pairs(npcHighlights) do
+			if h then pcall(function() h:Destroy() end) end
+		end
+		npcHighlights = {}
+	end
 end, "Highlights NPC body through walls with an outline.", {configKey = "npc_skeleton"})
 
 -- ========= NPC ESP CONFIGURACOES =========
@@ -12089,88 +12232,70 @@ end, "Fires automatically when Aimbot has a clear target.", {
 })
 
 -- NOVO: Terceira Pessoa
+local function nightThirdPersonStop()
+	_G._nightThirdPersonActive = false
+	if _G._nightThirdPersonStepped then _G._nightThirdPersonStepped:Disconnect() _G._nightThirdPersonStepped = nil end
+	pcall(function() RunService:UnbindFromRenderStep("NightThirdPerson") end)
+	_G._nightThirdPersonLoop = nil
+	pcall(function()
+		LocalPlayer.CameraMode = Enum.CameraMode.Classic
+		LocalPlayer.CameraMinZoomDistance = 0.5
+		LocalPlayer.CameraMaxZoomDistance = 50
+		local cam = workspace.CurrentCamera
+		if cam then
+			cam.CameraType = Enum.CameraType.Custom
+			local char = LocalPlayer.Character
+			local hum = char and char:FindFirstChildOfClass("Humanoid")
+			if hum then cam.CameraSubject = hum end
+		end
+	end)
+end
+
 thirdPersonToggle = createToggle(combatContent, "Third Person", function(enabled)
 	if enabled then
-		pcall(function()
-			local sp = game:GetService("StarterPlayer")
-			if sp then
-				sp.CameraMinZoomDistance = 12
-				sp.CameraMaxZoomDistance = 100
-			end
-		end)
+		nightThirdPersonStop()
 
-		LocalPlayer.CameraMaxZoomDistance = 100
-		LocalPlayer.CameraMinZoomDistance = 12
-
-		_G._nightThirdPersonYaw = 0
-		_G._nightThirdPersonPitch = 0
 		_G._nightThirdPersonActive = true
-
-		if _G._nightThirdPersonLoop then
-			pcall(function() RunService:UnbindFromRenderStep("NightThirdPerson") end)
-			_G._nightThirdPersonLoop = nil
-		end
 		_G._nightThirdPersonLoop = true
 
 		pcall(function()
-			RunService:BindToRenderStep("NightThirdPerson", Enum.RenderPriority.Last.Value + 3, function()
-				if not enabled or not _G._nightThirdPersonActive then
-					pcall(function() RunService:UnbindFromRenderStep("NightThirdPerson") end)
-					_G._nightThirdPersonLoop = nil
-					return
-				end
-
-				local cam = workspace.CurrentCamera
-				if not cam then return end
-				cam.CameraType = Enum.CameraType.Scriptable
-
+			LocalPlayer.CameraMode = Enum.CameraMode.Classic
+			LocalPlayer.CameraMinZoomDistance = 5
+			LocalPlayer.CameraMaxZoomDistance = 15
+			local cam = workspace.CurrentCamera
+			if cam then
+				cam.CameraType = Enum.CameraType.Custom
 				local char = LocalPlayer.Character
-				if not char then return end
-				local root = char:FindFirstChild("HumanoidRootPart")
-				if not root then return end
+				local hum = char and char:FindFirstChildOfClass("Humanoid")
+				if hum then cam.CameraSubject = hum end
+			end
+		end)
 
-				local delta = UserInputService:GetMouseDelta()
-				if not panelVisible and delta.Magnitude > 0 then
-					_G._nightThirdPersonYaw = (_G._nightThirdPersonYaw or 0) - delta.X * 0.004
-					_G._nightThirdPersonPitch = math.clamp(
-						(_G._nightThirdPersonPitch or 0) - delta.Y * 0.004,
-						-0.8, 0.8
-					)
+		_G._nightThirdPersonStepped = RunService.RenderStepped:Connect(function()
+			if not _G._nightThirdPersonActive then return end
+			pcall(function()
+				LocalPlayer.CameraMode = Enum.CameraMode.Classic
+				LocalPlayer.CameraMinZoomDistance = 5
+				LocalPlayer.CameraMaxZoomDistance = 15
+				local cam = workspace.CurrentCamera
+				if cam then
+					if cam.CameraType ~= Enum.CameraType.Custom then
+						cam.CameraType = Enum.CameraType.Custom
+					end
+					local char = LocalPlayer.Character
+					local hum = char and char:FindFirstChildOfClass("Humanoid")
+					if hum and cam.CameraSubject ~= hum then
+						cam.CameraSubject = hum
+					end
 				end
-
-				local rootPos = root.CFrame.Position
-				local dist = 8
-				local yaw = _G._nightThirdPersonYaw or 0
-				local pitch = _G._nightThirdPersonPitch or 0
-
-				local camX = rootPos.X - math.sin(yaw) * dist
-				local camY = rootPos.Y + 3 + pitch * 6
-				local camZ = rootPos.Z - math.cos(yaw) * dist
-				local camPos = Vector3.new(camX, camY, camZ)
-				local lookAt = rootPos + Vector3.new(0, 2, 0)
-				cam.CFrame = CFrame.lookAt(camPos, lookAt)
-				cam.Focus = root.CFrame
+				if not panelVisible then
+					UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+					UserInputService.MouseIconEnabled = false
+				end
 			end)
 		end)
 	else
-		_G._nightThirdPersonActive = false
-		LocalPlayer.CameraMaxZoomDistance = 400
-		LocalPlayer.CameraMinZoomDistance = 0.5
-		if _G._nightThirdPersonLoop then
-			pcall(function() RunService:UnbindFromRenderStep("NightThirdPerson") end)
-			_G._nightThirdPersonLoop = nil
-		end
-		pcall(function()
-			local cam = workspace.CurrentCamera
-			if cam then cam.CameraType = Enum.CameraType.Custom end
-		end)
-		pcall(function()
-			local char = LocalPlayer.Character
-			if char then
-				local hum = char:FindFirstChildOfClass("Humanoid")
-				if hum then hum.CameraOffset = Vector3.new(0, 0, 0) end
-			end
-		end)
+		nightThirdPersonStop()
 	end
 end, "Forces your character into a third-person view.", {
 	bindId = "thirdperson",
@@ -12498,7 +12623,7 @@ end)
 task.spawn(function()
 	while true do
 		task.wait(0.1)
-		if flyToggle then
+		if flyToggle and not noclipSoloEnabled then
 			local track = flyToggle:FindFirstChild("ToggleTrack")
 			if track then
 				if FlySystem.flying then
@@ -12510,6 +12635,295 @@ task.spawn(function()
 		end
 	end
 end)
+
+-- ================================================
+-- Noclip
+-- ================================================
+do
+	local noclipBind = nil
+	local noclipBindString = "None"
+	local noclipConn = nil
+
+	local function setNoclip(enabled)
+		if enabled then
+			if not noclipConn then
+				noclipConn = RunService.RenderStepped:Connect(function()
+					local char = LocalPlayer.Character
+					if not char then return end
+					for _, v in pairs(char:GetDescendants()) do
+						if v:IsA("BasePart") and v.CanCollide then
+							v.CanCollide = false
+						end
+					end
+				end)
+			end
+		else
+			if noclipConn then
+				noclipConn:Disconnect()
+				noclipConn = nil
+			end
+			-- Restaura colisão
+			local char = LocalPlayer.Character
+			if char then
+				for _, v in pairs(char:GetDescendants()) do
+					if v:IsA("BasePart") then
+						pcall(function() v.CanCollide = true end)
+					end
+				end
+			end
+		end
+	end
+
+	createToggle(movementContent, "Noclip", function(enabled)
+		setNoclip(enabled)
+	end, "Desativa a colisão do personagem — atravessa paredes e objetos.", {
+		bindId = "noclip",
+		getBindValue = function() return noclipBind end,
+		getBindName = function() return noclipBindString end,
+		setBind = function(bindValue, bindName)
+			noclipBind = bindValue
+			noclipBindString = bindDisplayName(bindValue, bindName)
+		end,
+	})
+end
+
+-- ================================================
+-- Noclip Solo Session
+-- ================================================
+local function enableNoclipSolo()
+	if noclipSoloEnabled then return end
+	noclipSoloEnabled = true
+	-- Ativa o Fly internamente, sem alterar o toggle visual do Fly.
+	noclipSoloOwnsFly = false
+	if not FlySystem.flying then
+		FlySystem:setFlyEnabled(true)
+		noclipSoloOwnsFly = true
+	end
+	if not soloDimensionEnabled then
+		local fn = _G._soloDimEnable
+		if fn then fn() end
+	end
+	if noclipSoloToggleApi then
+		noclipSoloToggleApi.setState(true)
+	end
+end
+
+local function disableNoclipSolo()
+	if not noclipSoloEnabled then return end
+	noclipSoloEnabled = false
+	-- Desativa apenas o Fly interno que foi iniciado pelo No-Clip Solo.
+	if noclipSoloOwnsFly then
+		FlySystem:setFlyEnabled(false)
+		noclipSoloOwnsFly = false
+	end
+	if soloDimensionEnabled then
+		local fn = _G._soloDimDisable
+		if fn then fn() end
+	end
+	if noclipSoloToggleApi then
+		noclipSoloToggleApi.setState(false)
+	end
+end
+
+	-- O modo do No-Clip Solo e escolhido no proprio engrenagem do bind.
+	-- Em Toggle, pressionar o bind alterna o estado; em Hold, o estado
+	-- permanece ativo somente enquanto o bind estiver pressionado.
+		local noclipSoloHoldInputConn = nil
+		local noclipSoloModePopup
+		local noclipSoloBindHint
+		local noclipSoloPendingGear
+		local noclipSoloPendingTag
+
+	local function stopNoclipSoloHoldInput()
+		if noclipSoloHoldInputConn then
+			noclipSoloHoldInputConn:Disconnect()
+			noclipSoloHoldInputConn = nil
+		end
+	end
+
+	local function startNoclipSoloHoldInput()
+		stopNoclipSoloHoldInput()
+		noclipSoloHoldInputConn = UserInputService.InputEnded:Connect(function(input)
+			if noclipSoloMode == "Hold" and noclipSoloBind and inputMatchesBind(input, noclipSoloBind) then
+				disableNoclipSolo()
+				stopNoclipSoloHoldInput()
+			end
+		end)
+	end
+
+	local function beginNoclipSoloBindCapture(gear, bindTag)
+		if noclipSoloBindHint then
+			noclipSoloBindHint.Visible = true
+			local gearPos = gear.AbsolutePosition
+			local gearSize = gear.AbsoluteSize
+			noclipSoloBindHint.Position = UDim2.new(0, gearPos.X - 180, 0, gearPos.Y + gearSize.Y + 8)
+				noclipSoloBindHint.Text = (noclipSoloMode == "Hold" and "Press a key/button for Hold" or "Press a key/button for Toggle") .. " | Esc clears"
+			activeBindHints[noclipSoloBindHint] = true
+		end
+		activeBindCapture = {
+			bindId = "noclipSolo",
+			hint = noclipSoloBindHint,
+			gear = gear,
+			setBind = function(bindValue, bindName)
+				noclipSoloBind = bindValue
+				noclipSoloBindString = bindDisplayName(bindValue, bindName)
+			end,
+			waitingForNextInput = true,
+			refreshBindTag = function()
+				local shown = noclipSoloBindString
+				if not shown or shown == "" or shown == "None" then shown = "--" end
+				if #shown > 6 then shown = shown:sub(1, 6) end
+				bindTag.Text = shown
+			end,
+		}
+		gear.TextColor3 = C.TxtWhite
+		bindTag.BackgroundColor3 = C.BindActive
+	end
+
+	local function setNoclipSoloMode(mode)
+		noclipSoloMode = mode == "Hold" and "Hold" or "Toggle"
+		if noclipSoloModePopup then
+			local toggleButton = noclipSoloModePopup:FindFirstChild("ToggleMode")
+			local holdButton = noclipSoloModePopup:FindFirstChild("HoldMode")
+			if toggleButton then toggleButton.BackgroundColor3 = noclipSoloMode == "Toggle" and C.BindActive or C.BgInput end
+			if holdButton then holdButton.BackgroundColor3 = noclipSoloMode == "Hold" and C.BindActive or C.BgInput end
+		end
+		if noclipSoloMode ~= "Hold" then
+			stopNoclipSoloHoldInput()
+			if noclipSoloEnabled then disableNoclipSolo() end
+		end
+	end
+
+		local function showNoclipSoloModePicker(gear, bindTag)
+			if not noclipSoloModePopup then return end
+			hideAllBindHints()
+			activeBindCapture = nil
+			noclipSoloPendingGear = gear
+			noclipSoloPendingTag = bindTag
+		noclipSoloModePopup.Position = UDim2.new(0, gear.AbsolutePosition.X - 174, 0, gear.AbsolutePosition.Y + gear.AbsoluteSize.Y + 8)
+		noclipSoloModePopup.Visible = true
+		activeBindHints[noclipSoloModePopup] = true
+		local toggleButton = noclipSoloModePopup:FindFirstChild("ToggleMode")
+		local holdButton = noclipSoloModePopup:FindFirstChild("HoldMode")
+		if toggleButton then toggleButton.BackgroundColor3 = noclipSoloMode == "Toggle" and C.BindActive or C.BgInput end
+		if holdButton then holdButton.BackgroundColor3 = noclipSoloMode == "Hold" and C.BindActive or C.BgInput end
+		end
+
+	UserInputService.InputBegan:Connect(function(input, gpe)
+		if gpe or noclipSoloMode ~= "Hold" then return end
+		if noclipSoloBind and inputMatchesBind(input, noclipSoloBind) then
+			enableNoclipSolo()
+			startNoclipSoloHoldInput()
+		end
+	end)
+
+	local noclipSoloApi
+	noclipSoloApi = createToggle(movementContent, "Noclip Solo Session", function(enabled)
+		if enabled then
+			enableNoclipSolo()
+		else
+			disableNoclipSolo()
+		end
+	end, "Ativa somente a Sessão Solo. Escolha Toggle ou Hold no engrenagem do bind.", {
+		bindId = "noclipSolo",
+		getBindValue = function() return noclipSoloBind end,
+		getBindName = function() return noclipSoloBindString end,
+		setBind = function(bindValue, bindName)
+			noclipSoloBind = bindValue
+			noclipSoloBindString = bindDisplayName(bindValue, bindName)
+		end,
+		onBindInput = function()
+			if noclipSoloMode == "Toggle" then
+				noclipSoloToggleApi.toggle()
+			end
+		end,
+		onReady = function(api)
+			noclipSoloToggleApi = api
+		end,
+	})
+
+	-- Popup exibido ao clicar com o botao direito no engrenagem.
+	noclipSoloModePopup = Instance.new("Frame")
+	noclipSoloModePopup.Name = "NoclipSoloBindModePopup"
+	noclipSoloModePopup.BackgroundColor3 = C.BgCard
+	noclipSoloModePopup.Size = UDim2.new(0, 164, 0, 78)
+	noclipSoloModePopup.Visible = false
+	noclipSoloModePopup.ZIndex = 10000032
+	noclipSoloModePopup.Parent = gui
+	Instance.new("UICorner", noclipSoloModePopup).CornerRadius = UDim.new(0, 7)
+	Stroke(C.Divider, 1, noclipSoloModePopup).Transparency = 0.15
+
+	local modeTitle = Instance.new("TextLabel")
+	modeTitle.BackgroundTransparency = 1
+	modeTitle.Position = UDim2.new(0, 8, 0, 3)
+	modeTitle.Size = UDim2.new(1, -16, 0, 20)
+	modeTitle.Text = "Bind mode"
+	modeTitle.Font = Enum.Font.GothamBold
+	modeTitle.TextSize = 11
+	modeTitle.TextColor3 = C.TxtWhite
+	modeTitle.ZIndex = 10000033
+	modeTitle.Parent = noclipSoloModePopup
+
+	local function makeModeButton(name, text, y)
+		local button = Instance.new("TextButton")
+		button.Name = name
+		button.BackgroundColor3 = C.BgInput
+		button.Position = UDim2.new(0, 8, 0, y)
+		button.Size = UDim2.new(1, -16, 0, 23)
+		button.Text = text
+		button.Font = Enum.Font.GothamBold
+		button.TextSize = 11
+		button.TextColor3 = C.TxtWhite
+		button.AutoButtonColor = false
+		button.ZIndex = 10000033
+		button.Parent = noclipSoloModePopup
+		Instance.new("UICorner", button).CornerRadius = UDim.new(0, 5)
+		return button
+		end
+		makeModeButton("ToggleMode", "Toggle", 24)
+		makeModeButton("HoldMode", "Hold", 50)
+		local toggleModeButton = noclipSoloModePopup:FindFirstChild("ToggleMode")
+		local holdModeButton = noclipSoloModePopup:FindFirstChild("HoldMode")
+		local function chooseNoclipSoloMode(mode)
+			if not noclipSoloPendingGear or not noclipSoloPendingTag then return end
+			setNoclipSoloMode(mode)
+			noclipSoloModePopup.Visible = false
+			activeBindHints[noclipSoloModePopup] = nil
+			beginNoclipSoloBindCapture(noclipSoloPendingGear, noclipSoloPendingTag)
+		end
+		if toggleModeButton then
+			toggleModeButton.MouseButton1Click:Connect(function() chooseNoclipSoloMode("Toggle") end)
+		end
+		if holdModeButton then
+			holdModeButton.MouseButton1Click:Connect(function() chooseNoclipSoloMode("Hold") end)
+		end
+
+		noclipSoloBindHint = Instance.new("TextLabel")
+		noclipSoloBindHint.Name = "NoclipSoloBindHint"
+		noclipSoloBindHint.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+		noclipSoloBindHint.BackgroundTransparency = 0.08
+		noclipSoloBindHint.Size = UDim2.new(0, 220, 0, 26)
+		noclipSoloBindHint.Font = Enum.Font.GothamBold
+		noclipSoloBindHint.TextColor3 = Color3.fromRGB(242, 242, 246)
+		noclipSoloBindHint.TextSize = 13
+		noclipSoloBindHint.TextXAlignment = Enum.TextXAlignment.Center
+		noclipSoloBindHint.TextYAlignment = Enum.TextYAlignment.Center
+		noclipSoloBindHint.Visible = false
+		noclipSoloBindHint.ZIndex = 10000031
+		noclipSoloBindHint.Parent = gui
+		Instance.new("UICorner", noclipSoloBindHint).CornerRadius = UDim.new(0, 6)
+
+		local noclipSoloCard = noclipSoloApi and noclipSoloApi.Parent
+	local noclipSoloGear = noclipSoloCard and noclipSoloCard:FindFirstChild("BindGear")
+		local noclipSoloTag = noclipSoloCard and noclipSoloCard:FindFirstChild("BindTag")
+		if noclipSoloGear and noclipSoloTag then
+			noclipSoloGear.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton2 then
+				showNoclipSoloModePicker(noclipSoloGear, noclipSoloTag)
+			end
+		end)
+	end
+
 
 -- NOVO: Bypass WalkSpeed (CFrame Speed)
 cframeMultiplicador = 1.5
@@ -12567,36 +12981,7 @@ cframeSliderInput:GetPropertyChangedSignal("Text"):Connect(function()
 	end
 end)
 
-noclipToggle = createToggle(movementContent, "No Clip", function(enabled)
-	noclip = enabled
-end, "Lets your character pass through walls and solid objects.", {
-	onReady = function(api)
-		noclipToggleApi = api
-	end,
-})
 
--- Sistema Noclip Melhorado - Loop contÃƒÂ­nuo para garantir que atravessa TODAS as paredes
-task.spawn(function()
-	while true do
-		task.wait(0.05) -- VerificaÃƒÂ§ÃƒÂ£o frequente
-		if noclip then
-			local character = LocalPlayer.Character
-			if character then
-				-- Desabilitar colisÃƒÂ£o em TODAS as partes do personagem
-				forEachCharacterPart(character, function(part)
-					if part.CanCollide == true then
-						part.CanCollide = false
-					end
-				end)
-				-- TambÃƒÂ©m desabilitar colisÃƒÂ£o em partes especÃƒÂ­ficas que podem ser esquecidas
-				local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
-				if humanoidRootPart and humanoidRootPart.CanCollide == true then
-					humanoidRootPart.CanCollide = false
-				end
-			end
-		end
-	end
-end)
 
 -- ========= SUBCATEGORIA: BOOSTS =========
 boostsSubCategory = Instance.new("Frame")
@@ -14188,6 +14573,732 @@ freecamSpeedInput.FocusLost:Connect(function()
 	end
 end)
 
+-- ========= DIMENSÃO SOLO (Troll) =========
+soloDimensionEnabled = false
+soloDimensionBind = nil
+soloDimensionBindString = "None"
+soloDimFakeChar = nil
+soloDimLoopConn = nil
+soloDimOldCamSubject = nil
+soloDimOldCamType = nil
+soloDimStoredOffset = Vector3.zero
+soloDimLastRealCF = CFrame.identity
+soloDimBanner = nil
+soloDimAPI = nil
+soloDimJumpRequestConn = nil
+soloDimVerticalVelocity = 0
+soloDimGrounded = true
+
+local function soloDimSetAnchored(char, anchored)
+	if not char then return end
+	if anchored then
+		for _, part in ipairs(char:GetDescendants()) do
+			if part:IsA("BasePart") then
+				part.Anchored = true
+			end
+		end
+	else
+		for _, part in ipairs(char:GetDescendants()) do
+			if part:IsA("BasePart") then
+				part.Anchored = false
+			end
+		end
+	end
+end
+
+local function soloDimShiftAssembly(char, delta)
+	if not char then return end
+	for _, part in ipairs(char:GetDescendants()) do
+		if part:IsA("BasePart") then
+			part.CFrame = part.CFrame + delta
+			part.AssemblyLinearVelocity = Vector3.zero
+			part.AssemblyAngularVelocity = Vector3.zero
+		end
+	end
+end
+
+local function soloDimShowBanner(show)
+	if not soloDimBanner then
+		soloDimBanner = New("Frame", {
+			Name = "SoloDimBanner",
+			BackgroundColor3 = C.BgCard,
+			BackgroundTransparency = 0.02,
+			BorderSizePixel = 0,
+			Size = UDim2.new(0, 300, 0, 54),
+			Position = UDim2.new(0.5, 0, 1, -72),
+			AnchorPoint = Vector2.new(0.5, 1),
+			ZIndex = 100000,
+			Visible = false,
+		}, gui)
+		Corner(14, soloDimBanner)
+		local bannerStroke = Stroke(C.Purple, 1, soloDimBanner)
+		bannerStroke.Transparency = 0.2
+
+		local glowBar = New("Frame", {
+			Name = "GlowBar",
+			BackgroundColor3 = C.Purple,
+			BackgroundTransparency = 0.25,
+			BorderSizePixel = 0,
+			Size = UDim2.new(0, 4, 0, 38),
+			Position = UDim2.new(0, 10, 0.5, 0),
+			AnchorPoint = Vector2.new(0, 0.5),
+			ZIndex = 100001,
+		}, soloDimBanner)
+		Corner(2, glowBar)
+
+		local dimIcon = New("TextLabel", {
+			Name = "DimIcon",
+			BackgroundTransparency = 1,
+			Text = "◈",
+			Font = Enum.Font.GothamBold,
+			TextSize = 24,
+			TextColor3 = C.PurpleGlow,
+			Size = UDim2.new(0, 40, 1, 0),
+			Position = UDim2.new(0, 20, 0, 0),
+			ZIndex = 100001,
+		}, soloDimBanner)
+
+		local dimTitle = New("TextLabel", {
+			Name = "DimTitle",
+			BackgroundTransparency = 1,
+			Text = "Modo Solo",
+			Font = Enum.Font.GothamBold,
+			TextSize = 18,
+			TextColor3 = Color3.fromRGB(255, 255, 255),
+			TextXAlignment = Enum.TextXAlignment.Left,
+			Size = UDim2.new(1, -76, 0, 24),
+			Position = UDim2.new(0, 68, 0, 6),
+			ZIndex = 100001,
+		}, soloDimBanner)
+
+		New("TextLabel", {
+			Name = "DimSub",
+			BackgroundTransparency = 1,
+			Text = "Corpo real escondido fora do mapa",
+			Font = Enum.Font.GothamBold,
+			TextSize = 11,
+			TextColor3 = C.TxtDim,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			Size = UDim2.new(1, -76, 0, 16),
+			Position = UDim2.new(0, 68, 0, 30),
+			ZIndex = 100001,
+		}, soloDimBanner)
+	end
+	if show then
+		if soloDimBanner.Parent ~= gui then soloDimBanner.Parent = gui end
+		soloDimBanner.Visible = true
+		soloDimBanner.BackgroundTransparency = 0.45
+		UI_Tween(soloDimBanner, {BackgroundTransparency = 0.02}, 0.25)
+	else
+		UI_Tween(soloDimBanner, {BackgroundTransparency = 1}, 0.25)
+		task.delay(0.3, function()
+			if soloDimBanner and not soloDimensionEnabled then
+				soloDimBanner.Visible = false
+			end
+		end)
+	end
+end
+
+local function soloDimRotationOnly(cf)
+	if not cf then return CFrame.identity end
+	return CFrame.new(cf.Position):Inverse() * cf
+end
+
+local function soloDimMoveFake(fake, cf)
+	if fake and cf then pcall(function() fake:PivotTo(cf) end) end
+end
+
+local soloDimIdleTrack = nil
+local soloDimWalkTrack = nil
+local soloDimJumpTrack = nil
+local soloDimJointBase = {}
+local soloDimBodyMoving = false
+local soloDimBodyAirborne = false
+local soloDimBodyAnimBound = false
+
+local function soloDimAnimateBody(fake, moving, airborne, clock)
+	if not fake then return end
+	local swing = moving and math.sin(clock * 9) * 0.72 or 0
+	local bob = moving and math.abs(math.sin(clock * 9)) * 0.045 or 0
+	for _, joint in ipairs(fake:GetDescendants()) do
+		if joint:IsA("Motor6D") then
+			if not soloDimJointBase[joint] then
+				soloDimJointBase[joint] = joint.Transform
+			end
+			local base = soloDimJointBase[joint]
+			local name = string.lower(joint.Name)
+			local angle = 0
+			if name:find("left shoulder") or name:find("leftshoulder") then
+				angle = swing
+			elseif name:find("right shoulder") or name:find("rightshoulder") then
+				angle = -swing
+			elseif name:find("left hip") or name:find("lefthip") then
+				angle = -swing
+			elseif name:find("right hip") or name:find("righthip") then
+				angle = swing
+			elseif name:find("left knee") or name:find("leftknee") then
+				angle = math.max(0, -swing) * 0.35
+			elseif name:find("right knee") or name:find("rightknee") then
+				angle = math.max(0, swing) * 0.35
+			elseif name == "waist" or name == "root" then
+				joint.Transform = base * CFrame.new(0, -bob, 0)
+				continue
+			end
+			if airborne and (name:find("shoulder") or name:find("hip") or name:find("knee")) then
+				angle = 0
+			end
+			joint.Transform = base * CFrame.Angles(angle, 0, 0)
+		end
+	end
+end
+
+local function soloDimSyncRealPose(realChar, fake)
+	if not realChar or not fake then return end
+	local hasTool = realChar:FindFirstChildOfClass("Tool") ~= nil
+	local realJoints = {}
+	for _, joint in ipairs(realChar:GetDescendants()) do
+		if joint:IsA("Motor6D") then
+			local key = joint.Name .. "|" .. (joint.Part0 and joint.Part0.Name or "") .. "|" .. (joint.Part1 and joint.Part1.Name or "")
+			realJoints[key] = joint
+		end
+	end
+	for _, joint in ipairs(fake:GetDescendants()) do
+		if joint:IsA("Motor6D") then
+			local name = string.lower(joint.Name)
+			local isLeg = name:find("hip") or name:find("knee") or name:find("ankle") or name:find("leg") or name:find("foot")
+			local isArm = name:find("shoulder") or name:find("elbow") or name:find("wrist") or name:find("arm") or name:find("hand")
+			
+			if soloDimBodyMoving or soloDimBodyAirborne then
+				if isLeg then continue end
+				if isArm and not hasTool then continue end
+				if name:find("root") or name == "waist" then continue end
+			end
+			
+			local key = joint.Name .. "|" .. (joint.Part0 and joint.Part0.Name or "") .. "|" .. (joint.Part1 and joint.Part1.Name or "")
+			local source = realJoints[key]
+			if source then joint.Transform = source.Transform end
+		end
+	end
+end
+
+local function soloDimSetupAnimations(fakeHum)
+	if not fakeHum then return end
+	soloDimJointBase = {}
+	pcall(function()
+		local oldAnimator = fakeHum:FindFirstChildOfClass("Animator")
+		if oldAnimator then oldAnimator:Destroy() end
+		local animator = Instance.new("Animator")
+		animator.Parent = fakeHum
+		
+		local function getPlayerAnim(animType, fallback)
+			local char = LocalPlayer.Character
+			if char and char:FindFirstChild("Animate") then
+				local folder = char.Animate:FindFirstChild(animType)
+				if folder then
+					local anim = folder:FindFirstChildOfClass("Animation")
+					if anim and anim.AnimationId ~= "" then
+						return anim.AnimationId
+					end
+				end
+			end
+			return "rbxassetid://" .. tostring(fallback)
+		end
+
+		local idleId = getPlayerAnim("idle", 507766666)
+		local walkId = getPlayerAnim("walk", 180426354)
+		if walkId == "rbxassetid://180426354" then walkId = getPlayerAnim("run", 180426354) end
+		local jumpId = getPlayerAnim("jump", 125750702)
+
+		local function loadTrack(animIdStr, looped, priority)
+			local animation = Instance.new("Animation")
+			animation.AnimationId = animIdStr
+			local track = animator:LoadAnimation(animation)
+			track.Looped = looped
+			track.Priority = priority
+			return track
+		end
+
+		soloDimIdleTrack = loadTrack(idleId, true, Enum.AnimationPriority.Idle)
+		soloDimWalkTrack = loadTrack(walkId, true, Enum.AnimationPriority.Movement)
+		soloDimJumpTrack = loadTrack(jumpId, false, Enum.AnimationPriority.Action)
+		
+		if soloDimIdleTrack then soloDimIdleTrack:Play(0.15) end
+	end)
+end
+
+local function soloDimStopAnimations()
+	for _, track in ipairs({soloDimIdleTrack, soloDimWalkTrack, soloDimJumpTrack}) do
+		if track then pcall(function() track:Stop(0.1); track:Destroy() end) end
+	end
+	soloDimIdleTrack = nil
+	soloDimWalkTrack = nil
+	soloDimJumpTrack = nil
+end
+
+local function soloDimBindBodyAnimation()
+	if soloDimBodyAnimBound then return end
+	soloDimBodyAnimBound = true
+	RunService:BindToRenderStep("NightSoloDimBodyAnimation", Enum.RenderPriority.Last.Value, function()
+		if soloDimensionEnabled and soloDimFakeChar then
+			-- Sync real pose but conditionally ignore legs/arms while moving to allow animations to play
+			soloDimSyncRealPose(LocalPlayer.Character, soloDimFakeChar)
+		end
+	end)
+end
+
+local function soloDimUnbindBodyAnimation()
+	if not soloDimBodyAnimBound then return end
+	soloDimBodyAnimBound = false
+	pcall(function() RunService:UnbindFromRenderStep("NightSoloDimBodyAnimation") end)
+	soloDimBodyMoving = false
+	soloDimBodyAirborne = false
+end
+
+local function soloDimMakeFakeVisible(fake)
+	if not fake then return end
+	for _, desc in ipairs(fake:GetDescendants()) do
+		if desc:IsA("BasePart") then
+			desc.LocalTransparencyModifier = 0
+			if desc.Name ~= "HumanoidRootPart" then
+				desc.Transparency = 0
+			end
+			desc.CanCollide = false
+			desc.Anchored = true
+		elseif desc:IsA("ForceField") then
+			desc:Destroy()
+		end
+	end
+	local hum = fake:FindFirstChildOfClass("Humanoid")
+	if hum then
+		hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+		hum.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
+	end
+end
+
+local function soloDimEnable()
+	if soloDimensionEnabled then return true end
+	local failMsg = nil
+	local ok, err = pcall(function()
+		local char = LocalPlayer.Character
+		local root = char and char:FindFirstChild("HumanoidRootPart")
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if not char or not root or not hum then
+			failMsg = "Personagem invalido"
+			return false
+		end
+
+		if soloDimFakeChar then
+			pcall(function() soloDimFakeChar:Destroy() end)
+			soloDimFakeChar = nil
+		end
+
+		local cam = workspace.CurrentCamera
+		soloDimOldCamSubject = cam and cam.CameraSubject
+		soloDimOldCamType = cam and cam.CameraType
+
+		local fake = nil
+		pcall(function()
+			local oldArchivable = char.Archivable
+			char.Archivable = true
+			fake = char:Clone()
+			char.Archivable = oldArchivable
+		end)
+		local fakeRoot, fakeHum
+		if fake and typeof(fake) == "Instance" then
+			pcall(function()
+				fake.Name = (char.Name or "SoloDim") .. "_SoloDim"
+				for _, desc in ipairs(fake:GetDescendants()) do
+					if desc:IsA("Script") or desc:IsA("LocalScript") or desc:IsA("ModuleScript") then
+						desc:Destroy()
+					end
+				end
+				fake.Parent = workspace
+			end)
+			fakeRoot = fake:FindFirstChild("HumanoidRootPart")
+			fakeHum = fake:FindFirstChildOfClass("Humanoid")
+			if fakeRoot then
+				soloDimMakeFakeVisible(fake)
+			end
+		end
+
+		if not fake or not fakeRoot then
+			if fake then pcall(function() fake:Destroy() end) end
+			fake = Instance.new("Model")
+			fake.Name = "SoloDimProxy"
+			fakeRoot = Instance.new("Part")
+			fakeRoot.Name = "HumanoidRootPart"
+			fakeRoot.Size = Vector3.new(2, 2, 1)
+			fakeRoot.Transparency = 1
+			fakeRoot.Anchored = true
+			fakeRoot.CanCollide = false
+			fakeRoot.CFrame = root.CFrame
+			fakeRoot.Parent = fake
+			local head = Instance.new("Part")
+			head.Name = "Head"
+			head.Size = Vector3.new(1.2, 1.2, 1.2)
+			head.Transparency = 1
+			head.Anchored = true
+			head.CanCollide = false
+			head.CFrame = root.CFrame * CFrame.new(0, 1.5, 0)
+			head.Parent = fake
+			fakeHum = Instance.new("Humanoid")
+			fakeHum.Parent = fake
+			fake.Parent = workspace
+		end
+
+		if fakeRoot then
+			fakeRoot.Anchored = true
+			fakeRoot.CFrame = root.CFrame
+			fakeRoot.CanCollide = false
+		end
+			if fakeHum then
+				pcall(function()
+					fakeHum.WalkSpeed = 16
+					fakeHum.AutoRotate = false
+					fakeHum.PlatformStand = false
+					fakeHum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+					fakeHum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
+				end)
+				soloDimSetupAnimations(fakeHum)
+			end
+		soloDimFakeChar = fake
+
+		soloDimStoredOffset = Vector3.new(0, 100000, 0)
+		soloDimSetAnchored(char, true)
+		soloDimShiftAssembly(char, soloDimStoredOffset)
+		soloDimLastRealCF = root.CFrame
+
+		if cam then
+			pcall(function()
+				cam.CameraType = Enum.CameraType.Custom
+				cam.CameraSubject = fakeHum or fakeRoot
+			end)
+		end
+
+			soloDimensionEnabled = true
+			soloDimBindBodyAnimation()
+
+		if soloDimLoopConn then
+			soloDimLoopConn:Disconnect()
+			soloDimLoopConn = nil
+		end
+		soloDimLoopConn = RunService.RenderStepped:Connect(function(dt)
+			if not soloDimensionEnabled then return end
+			local cam2 = workspace.CurrentCamera
+			local charNow = LocalPlayer.Character
+			local realRoot = charNow and charNow:FindFirstChild("HumanoidRootPart")
+			-- Personagem foi recriado (respawn): para a ponte e espera o handler desativar
+			if not hum or not hum.Parent then return end
+			if cam2 then
+				pcall(function()
+					if fakeHum and fakeHum.Parent then
+						cam2.CameraSubject = fakeHum
+					elseif fakeRoot and fakeRoot.Parent then
+						cam2.CameraType = Enum.CameraType.Scriptable
+						cam2.CFrame = CFrame.new(fakeRoot.Position + Vector3.new(0, 5, 10), fakeRoot.Position)
+					end
+				end)
+			end
+
+			-- Ponte de movimentação: espelha no corpo visível qualquer Fly/TP/Boost aplicado no corpo real
+			if realRoot and fakeRoot and fakeRoot.Parent then
+				local realNowCF = realRoot.CFrame
+				local realDelta = realNowCF.Position - soloDimLastRealCF.Position
+				if math.abs(realNowCF.Position.Y) < 40000 then
+					-- Escrita absoluta (TP Waypoint/Cursor/steal): corpo real foi movido para coordenadas do mapa
+					soloDimMoveFake(fake, CFrame.new(realNowCF.Position) * soloDimRotationOnly(realNowCF))
+				elseif realDelta.Magnitude > 0.001 then
+					-- Escrita relativa (Fly/Boost/Kidnap): corpo real continua escondido no offset, espelha o deslocamento
+					soloDimMoveFake(fake, CFrame.new(fakeRoot.Position + realDelta) * soloDimRotationOnly(realNowCF))
+				end
+
+				-- Caminhada manual do corpo visível
+					if hum and hum.Parent and hum.MoveDirection and hum.MoveDirection.Magnitude > 0.05 then
+						local walkSpeed = (hum.WalkSpeed and hum.WalkSpeed > 0 and hum.WalkSpeed) or 16
+						local moveDir = hum.MoveDirection
+						local currentCF = fakeRoot.CFrame
+						local targetLook = currentCF.Position + moveDir
+						local targetCF = CFrame.lookAt(currentCF.Position, targetLook)
+						local newCF = currentCF:Lerp(targetCF, 15 * (dt or 0.016))
+						newCF = newCF + moveDir * walkSpeed * (dt or 0.016)
+						soloDimMoveFake(fake, newCF)
+					end
+
+					-- Física vertical do corpo visível: aplica gravidade e corrige a altura no chão.
+					local step = math.clamp(dt or 0.016, 0, 0.1)
+					local isFlying = (FlySystem and FlySystem.flying) or freeflyOn
+					local isGrounded = true
+					
+					if not isFlying then
+						local rayParams = RaycastParams.new()
+						rayParams.FilterType = Enum.RaycastFilterType.Exclude
+						rayParams.FilterDescendantsInstances = {fake, charNow}
+						local groundHit = workspace:Raycast(fakeRoot.Position, Vector3.new(0, -6, 0), rayParams)
+						local groundY = groundHit and (groundHit.Position.Y + 3)
+						isGrounded = groundY and fakeRoot.Position.Y <= groundY + 0.12 and soloDimVerticalVelocity <= 0
+						if not isGrounded or soloDimVerticalVelocity > 0 then
+							soloDimVerticalVelocity = soloDimVerticalVelocity - workspace.Gravity * step
+							soloDimMoveFake(fake, fakeRoot.CFrame + Vector3.new(0, soloDimVerticalVelocity * step, 0))
+							fakeRoot = fake:FindFirstChild("HumanoidRootPart") or fakeRoot
+							if groundY and fakeRoot.Position.Y <= groundY then
+								soloDimMoveFake(fake, CFrame.new(fakeRoot.Position.X, groundY, fakeRoot.Position.Z) * soloDimRotationOnly(fakeRoot.CFrame))
+								soloDimVerticalVelocity = 0
+								isGrounded = true
+							end
+						end
+					else
+						soloDimVerticalVelocity = 0
+						isGrounded = false
+					end
+					
+					soloDimGrounded = isGrounded and true or false
+					soloDimBodyMoving = hum.MoveDirection.Magnitude > 0.05 or realDelta.Magnitude > 0.01
+					soloDimBodyAirborne = not soloDimGrounded
+					if soloDimWalkTrack and hum.MoveDirection.Magnitude > 0.05 and soloDimGrounded then
+						if not soloDimWalkTrack.IsPlaying then soloDimWalkTrack:Play(0.12) end
+					elseif soloDimWalkTrack and soloDimWalkTrack.IsPlaying then
+						soloDimWalkTrack:Stop(0.12)
+					end
+					if soloDimIdleTrack and soloDimGrounded and hum.MoveDirection.Magnitude <= 0.05 and not soloDimIdleTrack.IsPlaying then
+						soloDimIdleTrack:Play(0.12)
+					end
+					-- soloDimAnimateBody has been removed because it overrides the real Animator tracks
+
+					-- Trava o corpo real escondido atrás do corpo visível, preservando a rotação escolhida pelo sistema
+				pcall(function()
+					realRoot.CFrame = CFrame.new(fakeRoot.Position + soloDimStoredOffset) * soloDimRotationOnly(realNowCF)
+					realRoot.AssemblyLinearVelocity = Vector3.zero
+					realRoot.AssemblyAngularVelocity = Vector3.zero
+				end)
+				soloDimLastRealCF = realRoot.CFrame
+			end
+			end)
+
+					soloDimJumpRequestConn = UserInputService.JumpRequest:Connect(function()
+					if not soloDimensionEnabled or not soloDimFakeChar then return end
+					local isFlying = (FlySystem and FlySystem.flying) or freeflyOn
+					if isFlying then return end
+					if soloDimGrounded or infiniteJumpEnabled then
+						soloDimVerticalVelocity = 52
+						soloDimGrounded = false
+						if soloDimIdleTrack and soloDimIdleTrack.IsPlaying then soloDimIdleTrack:Stop(0.05) end
+						if soloDimWalkTrack and soloDimWalkTrack.IsPlaying then soloDimWalkTrack:Stop(0.05) end
+						if soloDimJumpTrack then soloDimJumpTrack:Play(0.05) end
+					end
+				end)
+		end)
+
+		if not ok and not failMsg then
+			failMsg = tostring(err)
+	end
+
+	if soloDimensionEnabled then
+		pcall(function() soloDimShowBanner(true) end)
+		return true
+	end
+	if failMsg and showMenuToast then
+		showMenuToast("Dimensão Solo", failMsg, Color3.fromRGB(255, 100, 100))
+	end
+	return false
+end
+_G._soloDimEnable = soloDimEnable
+
+local function soloDimDisable()
+	if not soloDimensionEnabled then return end
+	pcall(function()
+		local char = LocalPlayer.Character
+		local root = char and char:FindFirstChild("HumanoidRootPart")
+
+		if root and soloDimFakeChar then
+			local fakeRoot = soloDimFakeChar:FindFirstChild("HumanoidRootPart")
+			if fakeRoot then
+				local delta = fakeRoot.Position - root.Position
+				soloDimShiftAssembly(char, delta)
+			else
+				soloDimShiftAssembly(char, -soloDimStoredOffset)
+			end
+		elseif root then
+			soloDimShiftAssembly(char, -soloDimStoredOffset)
+		end
+
+		if char then soloDimSetAnchored(char, false) end
+	end)
+
+	pcall(function()			if soloDimLoopConn then
+				soloDimLoopConn:Disconnect()
+				soloDimLoopConn = nil
+			end
+				if soloDimJumpRequestConn then
+					soloDimJumpRequestConn:Disconnect()
+					soloDimJumpRequestConn = nil
+				end
+				soloDimUnbindBodyAnimation()
+				soloDimStopAnimations()
+			soloDimVerticalVelocity = 0
+			soloDimGrounded = true
+			if soloDimFakeChar then
+			soloDimFakeChar:Destroy()
+			soloDimFakeChar = nil
+		end
+	end)
+
+	pcall(function()
+		local cam = workspace.CurrentCamera
+		if soloDimOldCamType then
+			cam.CameraType = soloDimOldCamType
+		end
+		local restoreSubject = soloDimOldCamSubject
+		if not restoreSubject or not restoreSubject.Parent then
+			local curHum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+			restoreSubject = curHum
+		end
+		if restoreSubject then
+			cam.CameraSubject = restoreSubject
+		end
+		soloDimOldCamType = nil
+		soloDimOldCamSubject = nil
+	end)
+
+	soloDimensionEnabled = false
+	pcall(function() soloDimShowBanner(false) end)
+end
+_G._soloDimDisable = soloDimDisable
+
+soloDimToggle = createToggle(trollCategory, "Dimensão Solo", function(enabled)
+	local ok2, err2 = pcall(function()
+		if enabled then
+			local ok = soloDimEnable()
+			if not ok then
+				if soloDimAPI and soloDimAPI.setState then
+					soloDimAPI.setState(false)
+				end
+			end
+		else
+			soloDimDisable()
+		end
+	end)
+	if not ok2 then
+		if soloDimAPI and soloDimAPI.setState then
+			pcall(function() soloDimAPI.setState(false) end)
+		end
+		if showMenuToast then
+			showMenuToast("Dimensão Solo", "Erro: " .. tostring(err2), Color3.fromRGB(255, 100, 100))
+		end
+	end
+end, "Esconde o corpo real longe do mapa e mantém um corpo visível no lugar. Fly, TP e outras funções de movimento funcionam normalmente. Ao desativar, teleporta para a nova posição.", {
+	bindId = "solodim",
+	getBindValue = function() return soloDimensionBind end,
+	getBindName = function() return soloDimensionBindString end,
+	setBind = function(bindValue, bindName)
+		soloDimensionBind = bindValue
+		soloDimensionBindString = bindDisplayName(bindValue, bindName)
+	end,
+	onReady = function(api)
+		soloDimAPI = api
+	end,
+})
+soloDimToggle.LayoutOrder = 11
+
+local function soloDimOnCharAdded()
+	if not soloDimensionEnabled then return end
+	task.wait(0.5)
+	soloDimDisable()
+	if soloDimAPI and soloDimAPI.setState then
+		soloDimAPI.setState(false)
+	end
+end
+LocalPlayer.CharacterAdded:Connect(soloDimOnCharAdded)
+
+-- ========= LAG SERVER (Troll) =========
+-- Baseado no DeepHat Brutal Network Saturation (High Intensity Burst Mode), sem interface
+
+-- Configurações de poder
+local LAG_BURST_COUNT = 25      -- Quantos pacotes por rajada
+local LAG_THREAD_STRENGTH = 10  -- Threads simultâneas
+local LAG_PAYLOAD_SIZE = 8000   -- Tamanho do pacote (dados pesados)
+local LAG_REFRESH_RATE = 0.01   -- Delay mínimo entre rajadas
+
+lagServerEnabled = false
+lagServerThreads = {}
+lagServerToggleApi = nil
+lagServerPayloadData = string.rep("Z", LAG_PAYLOAD_SIZE) .. os.clock() -- Payload massivo pré-calculado
+
+local function lagServerGetRemotes()
+	local remotes = {}
+	for _, v in pairs(ReplicatedStorage:GetDescendants()) do
+		if v:IsA("RemoteEvent") then
+			table.insert(remotes, v)
+		end
+	end
+	return remotes
+end
+
+-- Função de disparo de rajada (burst)
+local function lagServerExecuteBurst(remotes)
+	while lagServerEnabled do
+		local target = remotes[math.random(1, #remotes)]
+
+		if target then
+			-- Loop de rajada: dispara varios pacotes de uma vez so
+			for i = 1, LAG_BURST_COUNT do
+				pcall(function()
+					target:FireServer(lagServerPayloadData, i, "BRUTE_FORCE", math.random(), "STRESS")
+				end)
+			end
+		end
+
+		-- Delay mínimo para nao travar o SEU cliente completamente
+		task.wait(LAG_REFRESH_RATE)
+	end
+end
+
+local function lagServerStop()
+	lagServerEnabled = false
+	for _, thread in ipairs(lagServerThreads) do
+		task.cancel(thread)
+	end
+	lagServerThreads = {}
+end
+
+lagServerToggle = createToggle(trollCategory, "Lag Server", function(enabled)
+	pcall(function()
+		if enabled then
+			local remotes = lagServerGetRemotes()
+			if #remotes == 0 then
+				lagServerEnabled = false
+				showMenuToast("Lag Server", "Nenhum Remote encontrado! Verifique o ambiente.", Color3.fromRGB(255, 170, 70))
+				if lagServerToggleApi and lagServerToggleApi.setState then
+					lagServerToggleApi.setState(false)
+				end
+				return
+			end
+
+			lagServerEnabled = true
+			lagServerThreads = {}
+			for _ = 1, LAG_THREAD_STRENGTH do
+				table.insert(lagServerThreads, task.spawn(function()
+					lagServerExecuteBurst(remotes)
+				end))
+			end
+			showMenuToast("Lag Server", "Saturacao brutal ativa (" .. LAG_THREAD_STRENGTH .. " threads, burst " .. LAG_BURST_COUNT .. ")", Color3.fromRGB(255, 100, 100))
+		else
+			lagServerStop()
+		end
+	end)
+end, "Saturacao brutal de rede estilo DeepHat: 10 threads disparando rajadas de 25 pacotes pesados (8KB) em RemoteEvents a cada 0.01s. Enche o servidor de trafego e processamento de rede. Task.wait() mantem o FPS local estavel.", {
+	bindId = "lagserver",
+	getBindValue = function() return lagServerBind end,
+	getBindName = function() return lagServerBindString end,
+	setBind = function(bindValue, bindName)
+		lagServerBind = bindValue
+		lagServerBindString = bindDisplayName(bindValue, bindName)
+	end,
+	onReady = function(api)
+		lagServerToggleApi = api
+	end,
+})
+lagServerToggle.LayoutOrder = 12
+
 -- ========= AUTO REJOIN (Misc) =========
 autoRejoinToggle = createToggle(nil, "Auto Rejoin", function(enabled)
 	autoRejoinEnabled = enabled
@@ -14533,6 +15644,187 @@ end, "Bloqueia cliques/taps para o jogo (o menu continua clicável).")
 blockClickToggle.LayoutOrder = 8
 blockClickToggle.Parent = utilRoot
 
+xpcall(function()
+	local STAT_TXT = Color3.fromRGB(150, 160, 185)
+	local BLUE = Color3.fromRGB(41, 121, 255)
+	local statsGui, statsConn
+
+	local function getPing()
+		local ok, v = pcall(function()
+			return Stats.Network.ServerStatsItem["Data Ping"]:GetValue()
+		end)
+		if ok and v then return math.floor(v + 0.5) end
+		local ok2, p = pcall(function() return LocalPlayer:GetNetworkPing() * 1000 end)
+		if ok2 and p then return math.floor(p + 0.5) end
+		return 0
+	end
+
+	local function destroyStats()
+		if statsConn then statsConn:Disconnect() statsConn = nil end
+		if statsGui then statsGui:Destroy() statsGui = nil end
+		pcall(function() toastHolder.Position = UDim2.new(1, -24, 0, 24) end)
+	end
+
+	local function buildStats()
+		if statsGui then return end
+
+		-- GUI própria (não é afetada pelos presets de tema/estilo do menu)
+		statsGui = Instance.new("ScreenGui")
+		statsGui.Name = "NightPerfStats"
+		statsGui.ResetOnSpawn = false
+		statsGui.IgnoreGuiInset = true
+		statsGui.DisplayOrder = 999999998
+		statsGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+		statsGui.Parent = gui.Parent or LocalPlayer:WaitForChild("PlayerGui")
+
+		-- desce os toasts do menu para não ficarem por cima da barra
+		pcall(function() toastHolder.Position = UDim2.new(1, -24, 0, 56) end)
+
+		local pill = New("Frame", {
+			AnchorPoint = Vector2.new(1, 0),
+			Position = UDim2.new(1, -14, 0, 8),
+			Size = UDim2.fromOffset(0, 34),
+			AutomaticSize = Enum.AutomaticSize.X,
+			BackgroundColor3 = Color3.fromRGB(22, 28, 44),
+			BackgroundTransparency = 0.25,
+			BorderSizePixel = 0,
+		}, statsGui)
+		Corner(17, pill)
+		Stroke(Color3.fromRGB(52, 62, 90), 1, pill).Transparency = 0.4
+		Pad(0, 0, 14, 3, pill)
+		local pl = ListLayout(14, pill)
+		pl.FillDirection = Enum.FillDirection.Horizontal
+		pl.VerticalAlignment = Enum.VerticalAlignment.Center
+
+		local function group(order)
+			local g = New("Frame", {
+				Size = UDim2.fromOffset(0, 34),
+				AutomaticSize = Enum.AutomaticSize.X,
+				BackgroundTransparency = 1,
+				LayoutOrder = order,
+			}, pill)
+			local l = ListLayout(6, g)
+			l.FillDirection = Enum.FillDirection.Horizontal
+			l.VerticalAlignment = Enum.VerticalAlignment.Center
+			return g
+		end
+
+		local function barsIcon(parent, heights)
+			local n = #heights
+			local f = New("Frame", {
+				Size = UDim2.fromOffset(n * 4 - 1, 12),
+				BackgroundTransparency = 1,
+				LayoutOrder = 1,
+			}, parent)
+			for i, h in ipairs(heights) do
+				local bar = New("Frame", {
+					AnchorPoint = Vector2.new(0, 1),
+					Position = UDim2.new(0, (i - 1) * 4, 1, 0),
+					Size = UDim2.fromOffset(3, h),
+					BackgroundColor3 = BLUE,
+					BorderSizePixel = 0,
+				}, f)
+				Corner(1, bar)
+			end
+		end
+
+		local function userIcon(parent)
+			local f = New("Frame", {
+				Size = UDim2.fromOffset(10, 12),
+				BackgroundTransparency = 1,
+				LayoutOrder = 1,
+			}, parent)
+			local head = New("Frame", {
+				Position = UDim2.fromOffset(2, 0),
+				Size = UDim2.fromOffset(6, 6),
+				BackgroundColor3 = BLUE,
+				BorderSizePixel = 0,
+			}, f)
+			Corner(3, head)
+			local body = New("Frame", {
+				Position = UDim2.fromOffset(0, 7),
+				Size = UDim2.fromOffset(10, 5),
+				BackgroundColor3 = BLUE,
+				BorderSizePixel = 0,
+			}, f)
+			Corner(3, body)
+		end
+
+		local function statText(parent)
+			return New("TextLabel", {
+				Text = "",
+				TextSize = 11,
+				TextColor3 = STAT_TXT,
+				BackgroundTransparency = 1,
+				Size = UDim2.fromOffset(0, 34),
+				AutomaticSize = Enum.AutomaticSize.X,
+				LayoutOrder = 2,
+			}, parent)
+		end
+
+		-- FPS
+		local gFps = group(1)
+		barsIcon(gFps, { 6, 12, 9 })
+		local fpsLbl = statText(gFps)
+
+		-- Ping
+		local gPing = group(2)
+		barsIcon(gPing, { 4, 6, 9, 12 })
+		local pingLbl = statText(gPing)
+
+		-- Usuário (sempre o jogador que executou)
+		local gUser = group(3)
+		userIcon(gUser)
+		local userLbl = statText(gUser)
+		userLbl.Text = LocalPlayer.Name
+
+		-- "N" + foto
+		New("TextLabel", {
+			Text = "N",
+			TextSize = 13,
+			TextColor3 = Color3.fromRGB(255, 255, 255),
+			BackgroundTransparency = 1,
+			Size = UDim2.fromOffset(0, 34),
+			AutomaticSize = Enum.AutomaticSize.X,
+			LayoutOrder = 4,
+		}, pill)
+
+		local avatar = New("ImageLabel", {
+			Size = UDim2.fromOffset(28, 28),
+			LayoutOrder = 5,
+			BackgroundColor3 = Color3.fromRGB(50, 51, 60),
+			BorderSizePixel = 0,
+			Image = "rbxthumb://type=AvatarHeadShot&id=" .. LocalPlayer.UserId .. "&w=150&h=150",
+		}, pill)
+		Corner(14, avatar)
+		Stroke(Color3.fromRGB(190, 200, 225), 1, avatar).Transparency = 0.5
+
+		-- Atualização (FPS medido no RenderStepped, ping a cada 0.5s)
+		local frames, last = 0, os.clock()
+		statsConn = RunService.RenderStepped:Connect(function()
+			frames += 1
+			local now = os.clock()
+			if now - last >= 0.5 then
+				fpsLbl.Text = math.floor(frames / (now - last) + 0.5) .. " FPS"
+				pingLbl.Text = getPing() .. " MS"
+				frames, last = 0, now
+			end
+		end)
+	end
+
+	-- Se o menu for descarregado (Unload), remove a barra também
+	gui.Destroying:Connect(destroyStats)
+
+	local statsToggle = createToggle(infoRoot, "Estatística de Desempenho", function(enabled)
+		if enabled then buildStats() else destroyStats() end
+	end, "Mostra FPS, ping e o seu usuário no canto superior direito da tela.", {
+		configKey = "performance_stats", -- guarda/carrega nas configs do menu
+	})
+	statsToggle.LayoutOrder = 100 -- fica no fim da aba Info
+end, function(err)
+	warn("[NIGHT MENU] Estatística de Desempenho falhou: " .. tostring(err))
+end)
+
 resetCharacterBtn = New("TextButton", {
 	Name = "ResetCharacterButton",
 	LayoutOrder = 6,
@@ -14628,16 +15920,7 @@ end
 
 menuSizeBtn.MouseButton1Click:Connect(function()
 	currentSizeIndex = currentSizeIndex % #menuSizes + 1
-	local size = menuSizes[currentSizeIndex]
-	
-	-- Redimensionar mainFrame
-	mainFrame.Size = UDim2.new(0, size.width, 0, size.height)
-	
-	-- Aplicar redimensionamento proporcional
-	resizeUI(size.width, size.height)
-	
-	-- Atualizar texto do botÃƒÂ£o
-	menuSizeBtn.Text = "Size: " .. size.name
+	applyThemeSize(currentSizeIndex)
 end)
 
 bindAutoSize(movementSubCategory, movementLayout)
@@ -15133,7 +16416,7 @@ function serializeBindValue(bindValue)
 		return {kind = "KeyCode", value = bindValue.Name}
 	end
 
-	if type(bindValue) == "string" and bindValue ~= "" then
+	if type(bindValue) == "string" and bindValue ~= "" and bindValue ~= "None" then
 		return {kind = "Mouse", value = bindValue}
 	end
 
@@ -15193,6 +16476,63 @@ function serializeLuaValue(value, depth)
 	return "nil"
 end
 
+local CONFIG_VALUE_KEYS = {
+	"aimbotFOV", "aimbotSmooth", "aimbotTarget", "aimbotOnlyVisible", "aimbotMobile", "aimbotTeamCheck", "aimbotShowFOV",
+	"espPosition", "espMode", "ESP_MAX_DISTANCE", "tracerMode", "espAutoEnabled", "espColor", "espTracerColor", "espDistanceColor", "espNameColor", "skeletonColor",
+	"npcEspMode", "npcTracerMode", "npcEspPosition", "npcEspColor", "npcEspNameColor", "npcEspTracerColor", "npcEspDistanceColor", "npcEspHealthColor",
+	"npcAimbotFOV", "npcAimbotSmooth", "npcAimbotTarget", "npcAimbotShowFOV",
+	"speedBoostValue", "jumpPowerBoostValue", "freecamSpeed", "chatSpammerMessage", "chatSpammerInterval", "noclipSoloMode",
+	"autoclickerInterval", "autoclickerMode", "autoclickerButton", "autoclickerFixedX", "autoclickerFixedY", "fastHitInterval",
+	"radarRange", "stealDistanceValue", "stealTargetMode", "tpCursorCooldownSeconds", "instantInteractWhitelistText", "instantInteractBlacklistText",
+	"autoKillAttackSpeed", "autofireCooldown", "spinbotSpeed", "magnetDistance", "magnetRange", "hitboxSize",
+}
+
+function encodeConfigValue(value)
+	local valueType = typeof(value)
+	if valueType == "Color3" then
+		return {__type = "Color3", r = value.R, g = value.G, b = value.B}
+	elseif valueType == "Vector2" then
+		return {__type = "Vector2", x = value.X, y = value.Y}
+	elseif valueType == "Vector3" then
+		return {__type = "Vector3", x = value.X, y = value.Y, z = value.Z}
+	elseif valueType == "UDim2" then
+		return {__type = "UDim2", xs = value.X.Scale, xo = value.X.Offset, ys = value.Y.Scale, yo = value.Y.Offset}
+	elseif valueType == "EnumItem" then
+		return {__type = "EnumItem", enum = tostring(value.EnumType):gsub("^Enum%.", ""), name = value.Name}
+	elseif type(value) == "number" or type(value) == "string" or type(value) == "boolean" then
+		return value
+	end
+	return nil
+end
+
+function decodeConfigValue(savedValue, currentValue)
+	if type(savedValue) == "table" then
+		if savedValue.__type == "Color3" and type(savedValue.r) == "number" and type(savedValue.g) == "number" and type(savedValue.b) == "number" then
+			return Color3.new(math.clamp(savedValue.r, 0, 1), math.clamp(savedValue.g, 0, 1), math.clamp(savedValue.b, 0, 1))
+		elseif savedValue.__type == "Vector2" and type(savedValue.x) == "number" and type(savedValue.y) == "number" then
+			return Vector2.new(savedValue.x, savedValue.y)
+		elseif savedValue.__type == "Vector3" and type(savedValue.x) == "number" and type(savedValue.y) == "number" and type(savedValue.z) == "number" then
+			return Vector3.new(savedValue.x, savedValue.y, savedValue.z)
+		elseif savedValue.__type == "UDim2" and type(savedValue.xs) == "number" and type(savedValue.xo) == "number" and type(savedValue.ys) == "number" and type(savedValue.yo) == "number" then
+			return UDim2.new(savedValue.xs, savedValue.xo, savedValue.ys, savedValue.yo)
+		elseif savedValue.__type == "EnumItem" and type(savedValue.enum) == "string" and type(savedValue.name) == "string" then
+			local enumType = Enum[savedValue.enum]
+			return enumType and enumType[savedValue.name] or nil
+		end
+		return nil
+	end
+	if type(savedValue) == type(currentValue) and (type(savedValue) == "number" or type(savedValue) == "string" or type(savedValue) == "boolean") then
+		return savedValue
+	end
+	return nil
+end
+local configRuntimeEnv = _G
+if getfenv then
+	pcall(function()
+		local scriptEnvironment = getfenv()
+		if type(scriptEnvironment) == "table" then configRuntimeEnv = scriptEnvironment end
+	end)
+end
 function collectMenuConfig()
 	local configData = {
 		toggles = {},
@@ -15209,9 +16549,7 @@ function collectMenuConfig()
 	for bindId, entry in pairs(configBindRegistry) do
 		if entry and entry.getBindValue then
 			local serializedBind = serializeBindValue(entry.getBindValue())
-			if serializedBind then
-				configData.binds[bindId] = serializedBind
-			end
+			configData.binds[bindId] = serializedBind or {kind = "None"}
 		end
 	end
 
@@ -15226,6 +16564,12 @@ function collectMenuConfig()
 	configData.values.autoclickerFixedX = autoclickerFixedX
 	configData.values.autoclickerFixedY = autoclickerFixedY
 	configData.values.fastHitInterval = fastHitInterval
+	for _, key in ipairs(CONFIG_VALUE_KEYS) do
+		local encoded = encodeConfigValue(configRuntimeEnv[key])
+		if encoded ~= nil then configData.values[key] = encoded end
+	end
+	if _G.hitboxColor then configData.values.hitboxColor = encodeConfigValue(_G.hitboxColor) end
+	if FlySystem then configData.values.flySpeed = FlySystem.speed end
 
 	return configData
 end
@@ -15245,7 +16589,7 @@ end
 
 function readConfigLibrary()
 	if not isfile or not readfile or not isfile(MENU_CONFIG_FILE) then
-		return {configs = {}}
+		return {configs = {}, settings = {}}
 	end
 
 	local readSuccess, fileContent = pcall(function()
@@ -15351,11 +16695,23 @@ function saveLibrarySettings()
 		return false, err
 	end
 
+	if type(libraryData.configs) ~= "table" then
+		libraryData.configs = {}
+	end
+	if type(libraryData.settings) ~= "table" then
+		libraryData.settings = {}
+	end
+
 	libraryData.settings.themeName = currentThemeName
 	libraryData.settings.themeStyle = currentThemeStyle
 	libraryData.settings.sizeIndex = currentSizeIndex
 	libraryData.settings.hasCustomSizePreference = hasCustomSizePreference and true or false
 	libraryData.settings.autoExecuteEnabled = autoExecuteEnabled
+	libraryData.settings.language = currentUILanguage
+	libraryData.settings.activeTab = currentTab
+	libraryData.settings.activeMiscTab = activeMiscSubPageName
+	libraryData.settings.mainFramePosition = packInterfacePosition(mainFrame and mainFrame.Position or menuExpandedPosition)
+	libraryData.settings.restoreButtonPosition = packInterfacePosition(restoreButtonDefaultPosition)
 
 	return writeConfigLibrary(libraryData)
 end
@@ -15634,6 +16990,74 @@ function loadConfig(configName)
 		end
 	end
 
+		for _, key in ipairs(CONFIG_VALUE_KEYS) do
+		local savedValue = configData.values and configData.values[key]
+		if savedValue ~= nil then
+			local decoded = decodeConfigValue(savedValue, configRuntimeEnv[key])
+			if decoded ~= nil then configRuntimeEnv[key] = decoded end
+		end
+	end
+	if configData.values and type(configData.values.flySpeed) == "number" and FlySystem then FlySystem:setSpeed(configData.values.flySpeed) end
+	if configData.values and configData.values.hitboxColor then
+		local color = decodeConfigValue(configData.values.hitboxColor, _G.hitboxColor)
+		if color then _G.hitboxColor = color end
+	end
+
+	if espDistLabel then espDistLabel.Text = tostring(ESP_MAX_DISTANCE) end
+	if espDistFill then espDistFill.Size = UDim2.fromScale(ESP_MAX_DISTANCE / 500, 1) end
+	if modeBtn then modeBtn.Text = "Modo: " .. tostring(espMode) end
+	if positionBtn then positionBtn.Text = "Position: " .. tostring(espPosition) end
+	if npcPositionBtn then npcPositionBtn.Text = "Position: " .. tostring(npcEspPosition) end
+	if tracerModeBtn then tracerModeBtn.Text = "Modo Tracer: " .. tostring(tracerMode) end
+	if boxColorBtn then boxColorBtn.BackgroundColor3 = espColor end
+	if tracerColorBtn then tracerColorBtn.BackgroundColor3 = espTracerColor end
+	if distColorBtn then distColorBtn.BackgroundColor3 = espDistanceColor end
+	if nameColorBtn then nameColorBtn.BackgroundColor3 = espNameColor end
+	if skeletonColorBtn then skeletonColorBtn.BackgroundColor3 = skeletonColor end
+	if npcModeBtn then npcModeBtn.Text = "Modo: " .. tostring(npcEspMode) end
+	if npcTracerModeBtn then npcTracerModeBtn.Text = "Modo Tracer: " .. tostring(npcTracerMode) end
+	if npcBoxColorBtn then npcBoxColorBtn.BackgroundColor3 = npcEspColor end
+	if npcNameColorBtn then npcNameColorBtn.BackgroundColor3 = npcEspNameColor end
+	if npcTracerColorBtn then npcTracerColorBtn.BackgroundColor3 = npcEspTracerColor end
+	if npcDistColorBtn then npcDistColorBtn.BackgroundColor3 = npcEspDistanceColor end
+	if fovLabel then fovLabel.Text = tostring(aimbotFOV) end
+	if fovInput then fovInput.Text = tostring(aimbotFOV) end
+	if fovFill then fovFill.Size = UDim2.fromScale(math.clamp(aimbotFOV / 200, 0, 1), 1) end
+	local playerFovCircle = gui and gui:FindFirstChild("FOVCircle")
+	if playerFovCircle then playerFovCircle.Size = UDim2.fromOffset(aimbotFOV * 3, aimbotFOV * 3) end
+	if smoothLabel then smoothLabel.Text = tostring(aimbotSmooth) end
+	if smoothFill then smoothFill.Size = UDim2.fromScale(math.clamp(aimbotSmooth / 20, 0, 1), 1) end
+	if targetDropdownBtn then targetDropdownBtn.Text = "Target: " .. tostring(aimbotTarget) end
+	if npcFovValue then npcFovValue.Text = tostring(npcAimbotFOV) end
+	if npcFovFill then npcFovFill.Size = UDim2.fromScale(math.clamp(npcAimbotFOV / 200, 0, 1), 1) end
+	local npcFovCircle = gui and gui:FindFirstChild("NpcFOVCircle")
+	if npcFovCircle then npcFovCircle.Size = UDim2.fromOffset(npcAimbotFOV * 3, npcAimbotFOV * 3) end
+	if npcSmoothValue then npcSmoothValue.Text = tostring(npcAimbotSmooth) end
+	if npcSmoothFill then npcSmoothFill.Size = UDim2.fromScale(math.clamp(npcAimbotSmooth / 20, 0, 1), 1) end
+	if npcTargetBtn then npcTargetBtn.Text = "Target: " .. tostring(npcAimbotTarget) end
+	if speedTitle then speedTitle.Text = "Velocidade: " .. tostring(speedBoostValue) end
+	if speedFill then speedFill.Size = UDim2.fromScale(math.clamp(speedBoostValue / 200, 0, 1), 1) end
+	if jumpTitle then jumpTitle.Text = "Pulo: " .. tostring(jumpPowerBoostValue) end
+	if jumpFill then jumpFill.Size = UDim2.fromScale(math.clamp(jumpPowerBoostValue / 200, 0, 1), 1) end
+	if speedBoostEnabled and LocalPlayer.Character then
+		local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+		if hum then hum.WalkSpeed = speedBoostValue end
+	end
+	if jumpPowerBoostEnabled and LocalPlayer.Character then
+		local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+		if hum then hum.JumpPower = jumpPowerBoostValue end
+	end
+	if hitboxSliderLabel then hitboxSliderLabel.Text = "Size: " .. tostring(hitboxSize) end
+	if hitboxSliderInput then hitboxSliderInput.Text = tostring(hitboxSize) end
+	if hitboxColorBtn and _G.hitboxColor then hitboxColorBtn.BackgroundColor3 = _G.hitboxColor end
+	if flySpeedInput and FlySystem then flySpeedInput.Text = tostring(FlySystem.speed) end
+	if freecamSpeedInput then freecamSpeedInput.Text = tostring(freecamSpeed) end
+	if chatSpammerIntervalInput then chatSpammerIntervalInput.Text = tostring(chatSpammerInterval) end
+	if magnetSliderInput then magnetSliderInput.Text = tostring(magnetDistance) end
+	if magnetSliderLabel then magnetSliderLabel.Text = "Magnet Distance: " .. tostring(magnetDistance) end
+	if stealDistanceInput then stealDistanceInput.Text = tostring(stealDistanceValue) end
+	if stealDistanceLabel then stealDistanceLabel.Text = "Steal Distance: " .. tostring(stealDistanceValue) end
+	if stealTargetModeBtn then stealTargetModeBtn.Text = "Steal Target Mode: " .. tostring(stealTargetMode) end
 	configData.lastUsed = makeConfigTimestamp()
 	libraryData.configs[cleanName] = configData
 	libraryData.lastSelected = cleanName
@@ -15682,6 +17106,10 @@ function deleteConfig(configName)
 end
 
 function unloadNightMenu()
+	if type(saveInterfaceSettings) == "function" then
+		pcall(saveInterfaceSettings)
+	end
+
 	pcall(function()
 		aimbotEnabled = false
 		espEnabled = false
@@ -15764,6 +17192,15 @@ function unloadNightMenu()
 		end
 		LocalPlayer.CameraMaxZoomDistance = 400
 		LocalPlayer.CameraMinZoomDistance = 0.5
+	end)
+
+	pcall(function()
+		if soloDimensionEnabled then
+			soloDimDisable()
+			if soloDimAPI and soloDimAPI.setState then
+				soloDimAPI.setState(false)
+			end
+		end
 	end)
 
 	pcall(clearAllESPVisuals)
@@ -16061,14 +17498,13 @@ RunService.RenderStepped:Connect(function()
 			if model and model.Parent and npcInfo.humanoid and npcInfo.humanoid.Health > 0 then
 				validNpcs[model] = true
 				if not panelVisible then
-					pcall(function()
-						if npcShowSkeleton or npcShowBox then ensureNpcHighlight(model) end
-						if npcShowBox then ensureNpcBox3D(model) end
-						if npcShowTracers then ensureNpcTracer(model) end
-						if npcShowDistance then ensureNpcDistanceLabel(model) end
-						if npcShowName then ensureNpcNameLabel(model) end
-						if npcShowHealth then ensureNpcHealthBar(model) end
-					end)
+					-- pcall separado por elemento: uma falha (ex: Drawing API) ja nao mata os restantes
+					pcall(function() if npcShowSkeleton then ensureNpcHighlight(model) end end)
+					pcall(function() if npcShowBox then ensureNpcBox3D(model) end end)
+					pcall(function() if npcShowTracers then ensureNpcTracer(model) end end)
+					pcall(function() if npcShowDistance then ensureNpcDistanceLabel(model) end end)
+					pcall(function() if npcShowName then ensureNpcNameLabel(model) end end)
+					pcall(function() if npcShowHealth then ensureNpcHealthBar(model) end end)
 				end
 			end
 		end
@@ -16781,21 +18217,49 @@ function applyStoredMenuSettings()
 	end
 
 	suppressThemeFeedback = true
-	if type(libraryData.settings) == "table" then
-		if libraryData.settings.autoExecuteEnabled ~= nil then
-			autoExecuteEnabled = libraryData.settings.autoExecuteEnabled and true or false
+	local settings = libraryData.settings
+	if type(settings) == "table" then
+		if settings.autoExecuteEnabled ~= nil then
+			autoExecuteEnabled = settings.autoExecuteEnabled and true or false
 		end
-		if libraryData.settings.hasCustomSizePreference ~= nil then
-			hasCustomSizePreference = libraryData.settings.hasCustomSizePreference and true or false
+		if settings.hasCustomSizePreference ~= nil then
+			hasCustomSizePreference = settings.hasCustomSizePreference and true or false
 		end
-		if libraryData.settings.themeName and THEME_PRESETS[libraryData.settings.themeName] then
-			applyThemePreset(libraryData.settings.themeName)
+		if type(settings.language) == "string" and LANGUAGE_NAMES[settings.language] then
+			currentUILanguage = settings.language
+			refreshLocalizedMenuText()
+			if refreshLanguageOptionButtons then
+				refreshLanguageOptionButtons()
+			end
 		end
-		if libraryData.settings.themeStyle and THEME_STYLES[libraryData.settings.themeStyle] then
-			applyThemeStyle(libraryData.settings.themeStyle)
+		if settings.themeName and THEME_PRESETS[settings.themeName] then
+			applyThemePreset(settings.themeName)
 		end
-		if hasCustomSizePreference and libraryData.settings.sizeIndex and menuSizes and menuSizes[libraryData.settings.sizeIndex] then
-			applyThemeSize(libraryData.settings.sizeIndex)
+		if settings.themeStyle and THEME_STYLES[settings.themeStyle] then
+			applyThemeStyle(settings.themeStyle)
+		end
+		if hasCustomSizePreference and settings.sizeIndex and menuSizes and menuSizes[settings.sizeIndex] then
+			applyThemeSize(settings.sizeIndex)
+		end
+		if type(settings.activeMiscTab) == "string" and miscSubPages[settings.activeMiscTab] then
+			setMiscSubTab(settings.activeMiscTab)
+		end
+		if type(settings.activeTab) == "string" and tabs[settings.activeTab] and pages[settings.activeTab] then
+			setTab(settings.activeTab)
+		end
+
+		local storedMainPosition = unpackInterfacePosition(settings.mainFramePosition)
+		if storedMainPosition then
+			mainFrame.Position = storedMainPosition
+			menuExpandedPosition = storedMainPosition
+		end
+
+		local storedRestorePosition = unpackInterfacePosition(settings.restoreButtonPosition)
+		if storedRestorePosition then
+			restoreButtonDefaultPosition = storedRestorePosition
+			if restoreButton then
+				restoreButton.Position = storedRestorePosition
+			end
 		end
 	end
 	suppressThemeFeedback = false
