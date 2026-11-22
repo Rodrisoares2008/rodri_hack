@@ -1841,6 +1841,17 @@ npcEspLastScanTime = 0
 npcEspScanInterval = 0.35
 npcEspCachedModels = {}
 
+-- NPC Triggerbot / NPC Hitbox State
+npcTriggerEnabled = false
+npcTriggerCooldown = 0.08
+lastNpcTriggerShot = 0
+npcTriggerBind = nil
+npcTriggerBindString = "None"
+npcHitboxEnabled = false
+npcHitboxBind = nil
+npcHitboxBindString = "None"
+_G.npcHitboxOriginalSizes = {}
+
 -- Fly-to target
 flightConn = nil
 flightStartTime = 0
@@ -11998,6 +12009,95 @@ UserInputService.InputChanged:Connect(function(input)
 	end
 end)
 
+-- ========= SUBCATEGORIA: NPC TRIGGERBOT / NPC HITBOX =========
+function rememberNpcHitbox(npcModel, npcRoot)
+	if not _G.npcHitboxOriginalSizes[npcModel] then
+		_G.npcHitboxOriginalSizes[npcModel] = {
+			Root = npcRoot,
+			Size = npcRoot.Size,
+			Transparency = npcRoot.Transparency,
+			Material = npcRoot.Material,
+		}
+	end
+end
+
+function applyNpcHitbox(info)
+	local npcModel = info and info.model
+	local npcRoot = info and info.root
+	if not npcModel or not npcModel.Parent or not npcRoot or not npcRoot.Parent then return end
+	rememberNpcHitbox(npcModel, npcRoot)
+	npcRoot.Size = Vector3.new(hitboxSize, hitboxSize, hitboxSize)
+	npcRoot.Transparency = 1
+	npcRoot.CanCollide = false
+end
+
+function clearNpcHitbox(npcModel, npcRoot)
+	local original = _G.npcHitboxOriginalSizes[npcModel]
+	npcRoot = npcRoot or (original and original.Root)
+	if npcRoot and npcRoot.Parent and original then
+		npcRoot.Size = original.Size
+		npcRoot.Transparency = original.Transparency
+		npcRoot.Material = original.Material
+	end
+	_G.npcHitboxOriginalSizes[npcModel] = nil
+end
+
+createToggle(npcAimbotContent, "NPC Triggerbot", function(enabled)
+	npcTriggerEnabled = enabled
+	lastNpcTriggerShot = 0
+end, "Fires automatically while the crosshair is on an NPC.", {
+	configKey = "npc_trigger",
+	bindId = "npcTrigger",
+	getBindValue = function() return npcTriggerBind end,
+	getBindName = function() return npcTriggerBindString end,
+	setBind = function(bindValue, bindName)
+		npcTriggerBind = bindValue
+		npcTriggerBindString = bindDisplayName(bindValue, bindName)
+	end,
+})
+
+createToggle(npcAimbotContent, "NPC Hitbox", function(enabled)
+	npcHitboxEnabled = enabled
+	if enabled then
+		if _G.npcHitboxLoop then _G.npcHitboxLoop:Disconnect() end
+		_G.npcHitboxLoop = RunService.RenderStepped:Connect(function()
+			for _, info in ipairs(npcEspCachedModels) do
+				pcall(function()
+					local npcModel = info.model
+					local npcRoot = info.root
+					local hum = info.humanoid
+					if npcModel and npcModel.Parent and npcRoot and npcRoot.Parent and hum and hum.Health > 0 then
+						applyNpcHitbox(info)
+					elseif npcModel then
+						clearNpcHitbox(npcModel, npcRoot)
+					end
+				end)
+			end
+		end)
+	else
+		if _G.npcHitboxLoop then _G.npcHitboxLoop:Disconnect() _G.npcHitboxLoop = nil end
+		local modelsToClear = {}
+		for npcModel, _ in pairs(_G.npcHitboxOriginalSizes) do
+			table.insert(modelsToClear, npcModel)
+		end
+		for _, npcModel in ipairs(modelsToClear) do
+			pcall(function()
+				clearNpcHitbox(npcModel)
+			end)
+		end
+		_G.npcHitboxOriginalSizes = {}
+	end
+end, "Expands the hitbox of NPCs (uses the Hitbox Size value).", {
+	configKey = "npc_hitbox",
+	bindId = "npcHitbox",
+	getBindValue = function() return npcHitboxBind end,
+	getBindName = function() return npcHitboxBindString end,
+	setBind = function(bindValue, bindName)
+		npcHitboxBind = bindValue
+		npcHitboxBindString = bindDisplayName(bindValue, bindName)
+	end,
+})
+
 -- NOVO: Hitbox Expander (Design Limpo - sÃƒÂ³ Root, visual separado)
 hitboxSize = 10
 _G.hitboxOriginalSizes = {} -- Guardar tamanho original do Root
@@ -12463,6 +12563,50 @@ end, "Forces your character into a third-person view.", {
 
 -- NOVO: Spinbot
 spinbotSpeed = 500 -- Velocidade MAIS SUAVE (Pedida pelo usuÃƒÂ¡rio)
+spinbotLookDown = 75 -- Inclina a CABEÃA para baixo (olhar para o chÃ£o / anti-aim). A cÃ¢mara do jogador nÃ£o Ã© alterada.
+
+-- Inclinar so a cabeca atraves dos joints (Neck/Waist). NUNCA inclinar o HumanoidRootPart:
+-- isso enterrava o corpo no chao e a fisica da Roblox atirava o personagem para cima.
+_G.spinLookDownJoints = {}
+_G.spinNeckOriginals = {}
+
+function getSpinLookDownJoints(char)
+	if _G.spinLookDownJoints[char] then return _G.spinLookDownJoints[char] end
+	local neck, waist
+	for _, obj in ipairs(char:GetDescendants()) do
+		if obj:IsA("Motor6D") then
+			if obj.Name == "Neck" and not neck then neck = obj end
+			if obj.Name == "Waist" and not waist then waist = obj end
+		end
+	end
+	local joints = {neck = neck, waist = waist}
+	_G.spinLookDownJoints[char] = joints
+	return joints
+end
+
+function applySpinLookDown(char)
+	local joints = getSpinLookDownJoints(char)
+	local function tilt(joint, degrees)
+		if not joint or not joint.Parent then return end
+		if _G.spinNeckOriginals[joint] == nil then
+			_G.spinNeckOriginals[joint] = joint.C0
+		end
+		joint.C0 = _G.spinNeckOriginals[joint] * CFrame.Angles(math.rad(degrees), 0, 0)
+	end
+	tilt(joints.neck, -spinbotLookDown)
+	tilt(joints.waist, -spinbotLookDown * 0.35)
+end
+
+function restoreSpinLookDown()
+	for joint, c0 in pairs(_G.spinNeckOriginals) do
+		pcall(function()
+			if joint and joint.Parent then joint.C0 = c0 end
+		end)
+	end
+	_G.spinNeckOriginals = {}
+	_G.spinLookDownJoints = {}
+end
+
 spinbotToggle = createToggle(combatContent, "Spinbot (Anti-Aim)", function(enabled)
 	if enabled then
 		_G.spinAngle = 0
@@ -12503,11 +12647,15 @@ spinbotToggle = createToggle(combatContent, "Spinbot (Anti-Aim)", function(enabl
 					end
 				end
 				
+				-- Inclina apenas a cabeca/tronco (anti-aim: olha para o chao). O Root continua direito.
+				-- A camara nao e tocada, por isso a tua visao continua normal.
+				pcall(function() applySpinLookDown(char) end)
+
 				-- RotaÃƒÂ§ÃƒÂ£o Pura, MatemÃƒÂ¡tica (ImpossÃƒÂ­vel de deitar ou bugar fÃƒÂ­sica)
 				_G.spinAngle = _G.spinAngle + spinbotSpeed
 				if _G.spinAngle >= 360 then _G.spinAngle = _G.spinAngle - 360 end
-				
-				-- MantÃƒÂ©m a posiÃƒÂ§ÃƒÂ£o (com o offset de movimento aplicado acima) rodado no eixo Y
+
+				-- MantÃƒÂ©m a posiÃƒÂ§ÃƒÂ£o rodado apenas no eixo Y (sem inclinar o Root)
 				root.CFrame = CFrame.new(root.Position) * CFrame.Angles(0, math.rad(_G.spinAngle), 0)
 			end
 		end)
@@ -12519,6 +12667,7 @@ spinbotToggle = createToggle(combatContent, "Spinbot (Anti-Aim)", function(enabl
 		if char and char:FindFirstChild("Humanoid") then
 			char.Humanoid.AutoRotate = true
 		end
+		pcall(restoreSpinLookDown)
 	end
 end, "Spins your character quickly to throw off enemy aim.", {
 	bindId = "spinbot",
@@ -17847,6 +17996,44 @@ RunService.RenderStepped:Connect(function()
 		currentNpcAimbotTarget = nil
 	end
 
+	-- NPC Triggerbot: dispara quando a mira esta sobre um NPC
+	if npcTriggerEnabled and not panelVisible then
+		local nowNpcTrigger = tick()
+		if nowNpcTrigger - npcEspLastScanTime >= npcEspScanInterval then
+			npcEspLastScanTime = nowNpcTrigger
+			npcEspCachedModels = getNPCsFromWorkspace()
+		end
+		if nowNpcTrigger - lastNpcTriggerShot >= npcTriggerCooldown then
+			local triggerCamera = workspace.CurrentCamera
+			local triggerChar = LocalPlayer.Character
+			if triggerCamera and triggerChar then
+				local rayParams = RaycastParams.new()
+				rayParams.FilterDescendantsInstances = {triggerChar, triggerCamera}
+				rayParams.FilterType = Enum.RaycastFilterType.Exclude
+				rayParams.IgnoreWater = true
+				local result = workspace:Raycast(triggerCamera.CFrame.Position, triggerCamera.CFrame.LookVector * 1000, rayParams)
+				if result and result.Instance then
+					local hitPart = result.Instance
+					while hitPart do
+						local triggered = false
+						for _, info in ipairs(npcEspCachedModels) do
+							if info.model == hitPart then
+								triggered = true
+								break
+							end
+						end
+						if triggered then
+							fireAutofireShot()
+							lastNpcTriggerShot = nowNpcTrigger
+							break
+						end
+						hitPart = hitPart.Parent
+					end
+				end
+			end
+		end
+	end
+
 	if aimbotEnabled then
 		-- Sempre procurar alvo se o Aimbot estiver ligado (para o Autofire usar)
 		if tick() - lastTargetUpdateTime >= 0.15 then
@@ -17930,7 +18117,7 @@ RunService.RenderStepped:Connect(function()
 	end
 
 	-- NPC ESP (throttled scan) — also scan when aimbot needs targets
-	if npcEspEnabled or npcAimbotEnabled then
+	if npcEspEnabled or npcAimbotEnabled or npcTriggerEnabled or npcHitboxEnabled then
 		local now = tick()
 		if now - npcEspLastScanTime >= npcEspScanInterval then
 			npcEspLastScanTime = now
