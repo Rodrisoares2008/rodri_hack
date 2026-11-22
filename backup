@@ -1694,6 +1694,7 @@ distanceLabels = {}  -- [Character] = Drawing.Text
 nameLabels = {}      -- [Character] = Drawing.Text
 weaponLabels = {}    -- [Character] = Drawing.Text (nome da arma na mão)
 showWeapon = false
+weaponNameColor = Color3.fromRGB(255, 200, 100) -- Cor padrão do nome da arma (laranja)
 healthBars = {}      -- [Character] = {bg, fill} - Barras de vida 2D
 espNameColor = Color3.fromRGB(255, 255, 255) -- Cor padrÃƒÂ£o do nome (branco)
 skeletonColor = Color3.fromRGB(255, 0, 0)
@@ -1806,6 +1807,7 @@ npcEspPosition = "Topo"
 npcEspBind = nil
 npcEspBindString = "None"
 npcEspColor = Color3.fromRGB(255, 165, 0) -- orange for NPCs
+npcSkeletonColor = Color3.fromRGB(255, 165, 0) -- Cor padrão do esqueleto dos NPCs
 npcEspNameColor = Color3.fromRGB(255, 200, 0)
 npcEspTracerColor = Color3.fromRGB(255, 165, 0)
 npcEspDistanceColor = Color3.fromRGB(255, 200, 0)
@@ -1817,6 +1819,7 @@ npcNameLabels = {}     -- [Model] = Drawing.Text
 npcDistanceLabels = {} -- [Model] = Drawing.Text
 npcWeaponLabels = {}   -- [Model] = Drawing.Text (nome da arma na mão)
 npcShowWeapon = false
+npcWeaponNameColor = Color3.fromRGB(255, 200, 100) -- Cor padrão do nome da arma dos NPCs
 npcHealthBars = {}     -- [Model] = {bg, fill}
 npcVisibilityCache = setmetatable({}, {__mode = "k"}) -- [Model] = {visible, at} - weak keys, GC limpa sozinho
 
@@ -4154,7 +4157,9 @@ function ensureWeaponLabel(character, player)
 	end
 
 	local camera = workspace.CurrentCamera
-	local screenPos, onScreen = camera:WorldToViewportPoint(targetRoot.Position + Vector3.new(0, 2.2, 0))
+	-- Mesmo ponto da distância, para a arma ficar logo abaixo dela
+	local bottomPos = targetRoot.Position - Vector3.new(0, 3, 0)
+	local screenPos, onScreen = camera:WorldToViewportPoint(bottomPos)
 	if not onScreen then
 		if weaponLabels[character] then weaponLabels[character].Visible = false end
 		return
@@ -4169,9 +4174,11 @@ function ensureWeaponLabel(character, player)
 	end
 	local cameraDistance = (targetRoot.Position - camera.CFrame.Position).Magnitude
 	label.Size = math.clamp(13 - cameraDistance / 100, 8, 13)
-	label.Color = Color3.fromRGB(255, 200, 100)
+	label.Color = weaponNameColor
 	label.Text = weaponText
-	label.Position = Vector2.new(screenPos.X, screenPos.Y)
+	local distLabel = distanceLabels[character]
+	local distOffset = (distLabel and distLabel.Visible) and (distLabel.Size * 0.4 + 2) or 0
+	label.Position = Vector2.new(screenPos.X, screenPos.Y + distOffset + label.Size * 0.5 + 12)
 	label.Visible = true
 end
 
@@ -4686,8 +4693,8 @@ function ensureNpcHighlight(model)
 			h.OutlineColor = Color3.fromRGB(255, 0, 0)
 		end
 	elseif not npcAutoEspEnabled then
-		h.FillColor = npcEspColor
-		h.OutlineColor = Color3.fromRGB(255, 255, 255)
+		h.FillColor = npcSkeletonColor
+		h.OutlineColor = npcSkeletonColor
 	end
 
 	if npcEspMode == "Cheio" then
@@ -4884,15 +4891,9 @@ function ensureNpcWeaponLabel(model)
 	end
 
 	local camera = workspace.CurrentCamera
-	local offset
-	if npcEspPosition == "Baixo" then
-		offset = Vector3.new(0, -2.2, 0)
-	elseif npcEspPosition == "Lado" then
-		offset = Vector3.new(2.5, 0.4, 0)
-	else
-		offset = Vector3.new(0, 2.2, 0)
-	end
-	local screenPos, onScreen = camera:WorldToViewportPoint(root.Position + offset)
+	-- Mesmo ponto da distância, para a arma ficar logo abaixo dela
+	local bottomPos = root.Position - Vector3.new(0, 3, 0)
+	local screenPos, onScreen = camera:WorldToViewportPoint(bottomPos)
 	if not onScreen then
 		if npcWeaponLabels[model] then npcWeaponLabels[model].Visible = false end
 		return
@@ -4907,13 +4908,11 @@ function ensureNpcWeaponLabel(model)
 	end
 	local cameraDistance = (root.Position - camera.CFrame.Position).Magnitude
 	label.Size = math.clamp(13 - cameraDistance / 100, 8, 13)
-	label.Color = Color3.fromRGB(255, 200, 100)
+	label.Color = npcWeaponNameColor
 	label.Text = weaponText
-	if npcEspPosition == "Lado" then
-		label.Position = Vector2.new(screenPos.X + 10, screenPos.Y + 12)
-	else
-		label.Position = Vector2.new(screenPos.X, screenPos.Y)
-	end
+	local distLabel = npcDistanceLabels[model]
+	local distOffset = (distLabel and distLabel.Visible) and (distLabel.Size * 0.4 + 2) or 0
+	label.Position = Vector2.new(screenPos.X, screenPos.Y + distOffset + label.Size * 0.5 + 12)
 	label.Visible = true
 end
 
@@ -9765,7 +9764,12 @@ nameColorBtn.TextSize = 18
 nameColorBtn.Parent = nameFrame
 Instance.new("UICorner", nameColorBtn).CornerRadius = UDim.new(0, 10)
 
-local weaponToggle = createToggle(espVisualContent, "Weapon", function(enabled)
+weaponFrame = Instance.new("Frame")
+weaponFrame.Size = UDim2.new(1, 0, 0, 46)
+weaponFrame.BackgroundTransparency = 1
+weaponFrame.Parent = espVisualContent
+
+weaponToggle = createToggle(weaponFrame, "Weapon", function(enabled)
 	showWeapon = enabled
 	if not enabled then
 		for char, label in pairs(weaponLabels) do
@@ -9774,21 +9778,67 @@ local weaponToggle = createToggle(espVisualContent, "Weapon", function(enabled)
 		weaponLabels = {}
 	end
 end, "Shows the name of the weapon held by visible players.", {configKey = "show_weapon"})
+weaponToggle.Size = UDim2.new(0.65, -5, 1, 0)
+weaponToggle.Position = UDim2.new(0, 0, 0, 0)
+
+local function nmFindColorIndex(colors, target)
+	if typeof(target) ~= "Color3" or type(colors) ~= "table" then return nil end
+	for i, col in ipairs(colors) do
+		if typeof(col) == "Color3" then
+			if math.abs(col.R - target.R) < 0.02 and math.abs(col.G - target.G) < 0.02 and math.abs(col.B - target.B) < 0.02 then
+				return i
+			end
+		end
+	end
+	return nil
+end
 
 local boxColors = {
-	Color3.fromRGB(255, 0, 0), Color3.fromRGB(0, 255, 0), Color3.fromRGB(0, 0, 255),
-	Color3.fromRGB(255, 255, 0), Color3.fromRGB(255, 0, 255), Color3.fromRGB(0, 255, 255),
+	Color3.fromRGB(255, 0, 0),
+	Color3.fromRGB(255, 165, 0),
+	Color3.fromRGB(255, 255, 0),
+	Color3.fromRGB(0, 255, 0),
+	Color3.fromRGB(0, 255, 255),
+	Color3.fromRGB(0, 0, 255),
+	Color3.fromRGB(255, 0, 255),
 	Color3.fromRGB(255, 255, 255)
 }
+
+-- Weapon: Toggle + Cor
+weaponColorBtn = Instance.new("TextButton")
+weaponColorBtn.Size = UDim2.new(0.35, -5, 1, 0)
+weaponColorBtn.Position = UDim2.new(0.65, 5, 0, 0)
+weaponColorBtn.BackgroundColor3 = weaponNameColor
+weaponColorBtn.Text = "COLOR"
+weaponColorBtn.Font = Enum.Font.GothamBold
+weaponColorBtn.TextSize = 18
+weaponColorBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+weaponColorBtn.Parent = weaponFrame
+Instance.new("UICorner", weaponColorBtn).CornerRadius = UDim.new(0, 10)
+
+weaponColorIndex = 1
+weaponColorBtn.MouseButton1Click:Connect(function()
+	local currentColorIndex = nmFindColorIndex(boxColors, weaponNameColor)
+	if currentColorIndex then
+		weaponColorIndex = currentColorIndex
+	end
+	weaponColorIndex = (weaponColorIndex % #boxColors) + 1
+	weaponNameColor = boxColors[weaponColorIndex]
+	weaponColorBtn.BackgroundColor3 = weaponNameColor
+	local brightness = weaponNameColor.R * 0.299 + weaponNameColor.G * 0.587 + weaponNameColor.B * 0.114
+	weaponColorBtn.TextColor3 = brightness > 0.72 and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
+end)
+
 local nameColorIndex = 7
 
 nameColorBtn.MouseButton1Click:Connect(function()
-	local currentColorIndex = table.find(boxColors, espNameColor)
+	local currentColorIndex = nmFindColorIndex(boxColors, espNameColor)
 	if currentColorIndex then nameColorIndex = currentColorIndex end
 	nameColorIndex = (nameColorIndex % #boxColors) + 1
 	espNameColor = boxColors[nameColorIndex]
 	nameColorBtn.BackgroundColor3 = espNameColor
-	nameColorBtn.TextColor3 = nameColorIndex == 7 and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
+	local brightness = espNameColor.R * 0.299 + espNameColor.G * 0.587 + espNameColor.B * 0.114
+	nameColorBtn.TextColor3 = brightness > 0.72 and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
 end)
 
 -- Vida (com padding aumentado)
@@ -9892,11 +9942,13 @@ Instance.new("UICorner", boxColorBtn).CornerRadius = UDim.new(0, 10)
 local boxColorIndex = 1
 
 boxColorBtn.MouseButton1Click:Connect(function()
-	local currentColorIndex = table.find(boxColors, espColor)
+	local currentColorIndex = nmFindColorIndex(boxColors, espColor)
 	if currentColorIndex then boxColorIndex = currentColorIndex end
 	boxColorIndex = (boxColorIndex % #boxColors) + 1
 	espColor = boxColors[boxColorIndex]
 	boxColorBtn.BackgroundColor3 = espColor
+	local brightness = espColor.R * 0.299 + espColor.G * 0.587 + espColor.B * 0.114
+	boxColorBtn.TextColor3 = brightness > 0.72 and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
 end)
 
 -- Tracers: Toggle + Cor (com padding aumentado)
@@ -9932,12 +9984,13 @@ Instance.new("UICorner", tracerColorBtn).CornerRadius = UDim.new(0, 10)
 local tracerColorIndex = 7
 
 tracerColorBtn.MouseButton1Click:Connect(function()
-	local currentColorIndex = table.find(boxColors, espTracerColor)
+	local currentColorIndex = nmFindColorIndex(boxColors, espTracerColor)
 	if currentColorIndex then tracerColorIndex = currentColorIndex end
 	tracerColorIndex = (tracerColorIndex % #boxColors) + 1
 	espTracerColor = boxColors[tracerColorIndex]
 	tracerColorBtn.BackgroundColor3 = espTracerColor
-	tracerColorBtn.TextColor3 = tracerColorIndex == 7 and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
+	local brightness = espTracerColor.R * 0.299 + espTracerColor.G * 0.587 + espTracerColor.B * 0.114
+	tracerColorBtn.TextColor3 = brightness > 0.72 and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
 end)
 
 -- DistÃƒÂ¢ncia: Toggle + Cor (com padding aumentado)
@@ -9972,12 +10025,13 @@ Instance.new("UICorner", distColorBtn).CornerRadius = UDim.new(0, 10)
 local distColorIndex = 4
 
 distColorBtn.MouseButton1Click:Connect(function()
-	local currentColorIndex = table.find(boxColors, espDistanceColor)
+	local currentColorIndex = nmFindColorIndex(boxColors, espDistanceColor)
 	if currentColorIndex then distColorIndex = currentColorIndex end
 	distColorIndex = (distColorIndex % #boxColors) + 1
 	espDistanceColor = boxColors[distColorIndex]
 	distColorBtn.BackgroundColor3 = espDistanceColor
-	distColorBtn.TextColor3 = distColorIndex == 4 and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
+	local brightness = espDistanceColor.R * 0.299 + espDistanceColor.G * 0.587 + espDistanceColor.B * 0.114
+	distColorBtn.TextColor3 = brightness > 0.72 and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
 end)
 
 -- Outros toggles (com padding aumentado)
@@ -10006,12 +10060,13 @@ Instance.new("UICorner", skeletonColorBtn).CornerRadius = UDim.new(0, 10)
 
 local skeletonColorIndex = 1
 skeletonColorBtn.MouseButton1Click:Connect(function()
-	local currentColorIndex = table.find(boxColors, skeletonColor)
+	local currentColorIndex = nmFindColorIndex(boxColors, skeletonColor)
 	if currentColorIndex then skeletonColorIndex = currentColorIndex end
 	skeletonColorIndex = (skeletonColorIndex % #boxColors) + 1
 	skeletonColor = boxColors[skeletonColorIndex]
 	skeletonColorBtn.BackgroundColor3 = skeletonColor
-	skeletonColorBtn.TextColor3 = skeletonColorIndex == 7 and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
+	local brightness = skeletonColor.R * 0.299 + skeletonColor.G * 0.587 + skeletonColor.B * 0.114
+	skeletonColorBtn.TextColor3 = brightness > 0.72 and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
 	for _, p in ipairs(Players:GetPlayers()) do refreshESPForPlayer(p) end
 end)
 
@@ -10596,7 +10651,12 @@ npcNameColorBtn.TextSize = 18
 npcNameColorBtn.Parent = npcNameFrame
 Instance.new("UICorner", npcNameColorBtn).CornerRadius = UDim.new(0, 10)
 
-local npcWeaponToggle = createToggle(npcEspContent, "Weapon", function(enabled)
+npcWeaponFrame = Instance.new("Frame")
+npcWeaponFrame.Size = UDim2.new(1, 0, 0, 46)
+npcWeaponFrame.BackgroundTransparency = 1
+npcWeaponFrame.Parent = npcEspContent
+
+npcWeaponToggle = createToggle(npcWeaponFrame, "Weapon", function(enabled)
 	npcShowWeapon = enabled
 	if not enabled then
 		for m, l in pairs(npcWeaponLabels) do
@@ -10605,15 +10665,42 @@ local npcWeaponToggle = createToggle(npcEspContent, "Weapon", function(enabled)
 		npcWeaponLabels = {}
 	end
 end, "Shows the name of the weapon held by visible NPCs.", {configKey = "npc_show_weapon"})
+npcWeaponToggle.Size = UDim2.new(0.65, -5, 1, 0)
+npcWeaponToggle.Position = UDim2.new(0, 0, 0, 0)
 
-local npcNameColorIndex = 7
+npcWeaponColorBtn = Instance.new("TextButton")
+npcWeaponColorBtn.Size = UDim2.new(0.35, -5, 1, 0)
+npcWeaponColorBtn.Position = UDim2.new(0.65, 5, 0, 0)
+npcWeaponColorBtn.BackgroundColor3 = npcWeaponNameColor
+npcWeaponColorBtn.Text = "COLOR"
+npcWeaponColorBtn.Font = Enum.Font.GothamBold
+npcWeaponColorBtn.TextSize = 18
+npcWeaponColorBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+npcWeaponColorBtn.Parent = npcWeaponFrame
+Instance.new("UICorner", npcWeaponColorBtn).CornerRadius = UDim.new(0, 10)
+
+npcWeaponColorIndex = 1
+npcWeaponColorBtn.MouseButton1Click:Connect(function()
+	local currentColorIndex = nmFindColorIndex(boxColors, npcWeaponNameColor)
+	if currentColorIndex then
+		npcWeaponColorIndex = currentColorIndex
+	end
+	npcWeaponColorIndex = (npcWeaponColorIndex % #boxColors) + 1
+	npcWeaponNameColor = boxColors[npcWeaponColorIndex]
+	npcWeaponColorBtn.BackgroundColor3 = npcWeaponNameColor
+	local brightness = npcWeaponNameColor.R * 0.299 + npcWeaponNameColor.G * 0.587 + npcWeaponNameColor.B * 0.114
+	npcWeaponColorBtn.TextColor3 = brightness > 0.72 and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
+end)
+
+local npcNameColorIndex = 1
 npcNameColorBtn.MouseButton1Click:Connect(function()
-	local currentColorIndex = table.find(boxColors, npcEspNameColor)
+	local currentColorIndex = nmFindColorIndex(boxColors, npcEspNameColor)
 	if currentColorIndex then npcNameColorIndex = currentColorIndex end
 	npcNameColorIndex = (npcNameColorIndex % #boxColors) + 1
 	npcEspNameColor = boxColors[npcNameColorIndex]
 	npcNameColorBtn.BackgroundColor3 = npcEspNameColor
-	npcNameColorBtn.TextColor3 = npcNameColorIndex == 7 and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
+	local brightness = npcEspNameColor.R * 0.299 + npcEspNameColor.G * 0.587 + npcEspNameColor.B * 0.114
+	npcNameColorBtn.TextColor3 = brightness > 0.72 and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
 end)
 
 -- NPC Health Bar
@@ -10668,11 +10755,13 @@ Instance.new("UICorner", npcBoxColorBtn).CornerRadius = UDim.new(0, 10)
 
 local npcBoxColorIndex = 1
 npcBoxColorBtn.MouseButton1Click:Connect(function()
-	local currentColorIndex = table.find(boxColors, npcEspColor)
+	local currentColorIndex = nmFindColorIndex(boxColors, npcEspColor)
 	if currentColorIndex then npcBoxColorIndex = currentColorIndex end
 	npcBoxColorIndex = (npcBoxColorIndex % #boxColors) + 1
 	npcEspColor = boxColors[npcBoxColorIndex]
 	npcBoxColorBtn.BackgroundColor3 = npcEspColor
+	local brightness = npcEspColor.R * 0.299 + npcEspColor.G * 0.587 + npcEspColor.B * 0.114
+	npcBoxColorBtn.TextColor3 = brightness > 0.72 and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
 end)
 
 -- NPC Lines: Toggle + Cor
@@ -10704,14 +10793,15 @@ npcTracerColorBtn.TextSize = 18
 npcTracerColorBtn.Parent = npcTracersFrame
 Instance.new("UICorner", npcTracerColorBtn).CornerRadius = UDim.new(0, 10)
 
-local npcTracerColorIndex = 7
+local npcTracerColorIndex = 1
 npcTracerColorBtn.MouseButton1Click:Connect(function()
-	local currentColorIndex = table.find(boxColors, npcEspTracerColor)
+	local currentColorIndex = nmFindColorIndex(boxColors, npcEspTracerColor)
 	if currentColorIndex then npcTracerColorIndex = currentColorIndex end
 	npcTracerColorIndex = (npcTracerColorIndex % #boxColors) + 1
 	npcEspTracerColor = boxColors[npcTracerColorIndex]
 	npcTracerColorBtn.BackgroundColor3 = npcEspTracerColor
-	npcTracerColorBtn.TextColor3 = npcTracerColorIndex == 7 and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
+	local brightness = npcEspTracerColor.R * 0.299 + npcEspTracerColor.G * 0.587 + npcEspTracerColor.B * 0.114
+	npcTracerColorBtn.TextColor3 = brightness > 0.72 and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
 end)
 
 -- NPC Distance: Toggle + Cor
@@ -10743,14 +10833,15 @@ npcDistColorBtn.TextSize = 18
 npcDistColorBtn.Parent = npcDistFrame
 Instance.new("UICorner", npcDistColorBtn).CornerRadius = UDim.new(0, 10)
 
-local npcDistColorIndex = 4
+local npcDistColorIndex = 1
 npcDistColorBtn.MouseButton1Click:Connect(function()
-	local currentColorIndex = table.find(boxColors, npcEspDistanceColor)
+	local currentColorIndex = nmFindColorIndex(boxColors, npcEspDistanceColor)
 	if currentColorIndex then npcDistColorIndex = currentColorIndex end
 	npcDistColorIndex = (npcDistColorIndex % #boxColors) + 1
 	npcEspDistanceColor = boxColors[npcDistColorIndex]
 	npcDistColorBtn.BackgroundColor3 = npcEspDistanceColor
-	npcDistColorBtn.TextColor3 = npcDistColorIndex == 4 and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
+	local brightness = npcEspDistanceColor.R * 0.299 + npcEspDistanceColor.G * 0.587 + npcEspDistanceColor.B * 0.114
+	npcDistColorBtn.TextColor3 = brightness > 0.72 and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
 end)
 
 -- NPC Skeleton Toggle
@@ -10759,7 +10850,7 @@ npcSkeletonFrame.Size = UDim2.new(1, 0, 0, 46)
 npcSkeletonFrame.BackgroundTransparency = 1
 npcSkeletonFrame.Parent = npcEspContent
 
-createToggle(npcSkeletonFrame, "Skeleton", function(enabled)
+npcSkeletonToggle = createToggle(npcSkeletonFrame, "Skeleton", function(enabled)
 	npcShowSkeleton = enabled
 	if not enabled then
 		for m, h in pairs(npcHighlights) do
@@ -10768,6 +10859,42 @@ createToggle(npcSkeletonFrame, "Skeleton", function(enabled)
 		npcHighlights = {}
 	end
 end, "Highlights NPC body through walls with an outline.", {configKey = "npc_skeleton"})
+npcSkeletonToggle.Size = UDim2.new(0.65, -5, 1, 0)
+npcSkeletonToggle.Position = UDim2.new(0, 0, 0, 0)
+
+npcSkeletonColorBtn = Instance.new("TextButton")
+npcSkeletonColorBtn.Size = UDim2.new(0.35, -5, 1, 0)
+npcSkeletonColorBtn.Position = UDim2.new(0.65, 5, 0, 0)
+npcSkeletonColorBtn.BackgroundColor3 = npcSkeletonColor
+npcSkeletonColorBtn.Text = "COLOR"
+npcSkeletonColorBtn.Font = Enum.Font.GothamBold
+npcSkeletonColorBtn.TextSize = 18
+npcSkeletonColorBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+npcSkeletonColorBtn.Parent = npcSkeletonFrame
+Instance.new("UICorner", npcSkeletonColorBtn).CornerRadius = UDim.new(0, 10)
+
+npcSkeletonColorIndex = 1
+npcSkeletonColorBtn.MouseButton1Click:Connect(function()
+	local currentColorIndex = nmFindColorIndex(boxColors, npcSkeletonColor)
+	if currentColorIndex then
+		npcSkeletonColorIndex = currentColorIndex
+	end
+	npcSkeletonColorIndex = (npcSkeletonColorIndex % #boxColors) + 1
+	npcSkeletonColor = boxColors[npcSkeletonColorIndex]
+	npcSkeletonColorBtn.BackgroundColor3 = npcSkeletonColor
+	local brightness = npcSkeletonColor.R * 0.299 + npcSkeletonColor.G * 0.587 + npcSkeletonColor.B * 0.114
+	npcSkeletonColorBtn.TextColor3 = brightness > 0.72 and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
+	if not npcAutoEspEnabled then
+		for m, h in pairs(npcHighlights) do
+			if h then
+				pcall(function()
+					h.FillColor = npcSkeletonColor
+					h.OutlineColor = npcSkeletonColor
+				end)
+			end
+		end
+	end
+end)
 
 -- ========= NPC ESP CONFIGURACOES =========
 npcEspConfigSub = Instance.new("Frame")
@@ -14722,62 +14849,82 @@ freecamToggle = createToggle(trollCategory, "Freecam", function(enabled)
 			btn.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
 			btn.Text = text
 			btn.Font = Enum.Font.GothamBold
-			btn.TextSize = 12
+			btn.TextSize = 10
 			btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-			btn.AutoButtonColor = false
 			btn.Parent = barFrame
 			Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
-
+			table.insert(actionBtns, btn)
 			btn.MouseButton1Click:Connect(function()
 				freecamActionIndex = index
 				updateFreecamAction()
 			end)
-			actionBtns[index] = btn
 			return btn
 		end
 
-		makeMiniBtn("Teleport", 8, 1)
-		makeMiniBtn("Push", 72, 2)
-		makeMiniBtn("Spectate", 136, 3)
-
-		-- Close button
-		local closeBtn = Instance.new("TextButton")
-		closeBtn.Size = UDim2.new(0, 56, 0, 24)
-		closeBtn.Position = UDim2.new(1, -64, 0.5, 0)
-		closeBtn.AnchorPoint = Vector2.new(0, 0.5)
-		closeBtn.BackgroundColor3 = Color3.fromRGB(80, 30, 30)
-		closeBtn.Text = "Close"
-		closeBtn.Font = Enum.Font.GothamBold
-		closeBtn.TextSize = 12
-		closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-		closeBtn.AutoButtonColor = false
-		closeBtn.Parent = barFrame
-		Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 6)
-		closeBtn.MouseButton1Click:Connect(function()
-			disableFreecam()
-			if freecamToggle and freecamToggle.Parent then
-				local api = freecamToggle
-				if api and api.setState then api.setState(false) end
-			end
-		end)
-
+		for i, action in ipairs(freecamActions) do
+			makeMiniBtn(action, 70 + (i - 1) * 64, i)
+		end
 		updateFreecamAction()
 
-		-- Scroll to change action + Click to execute action on crosshair position
-		if _G._freecamClickConn then _G._freecamClickConn:Disconnect() end
+		-- Clique na tela executa a acao selecionada no ponto da mira
 		_G._freecamClickConn = UserInputService.InputBegan:Connect(function(input, gpe)
-			if not freecamEnabled then return end
 			if gpe then return end
-
+			if not freecamEnabled then return end
 			if input.UserInputType == Enum.UserInputType.MouseButton1 then
-				local cam = workspace.CurrentCamera
-				-- Raycast from center of screen (crosshair)
 				local viewportSize = cam.ViewportSize
 				local ray = cam:ViewportPointToRay(viewportSize.X / 2, viewportSize.Y / 2)
-				local rayParams = RaycastParams.new()
-				rayParams.FilterType = Enum.RaycastFilterType.Exclude
-				rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
-				local result = workspace:Raycast(ray.Origin, ray.Direction * 2000, rayParams)
+
+				-- Mira prioriza players: chao/paredes nunca viram alvo
+				local function getTargetPlayer()
+					-- 1) raycast somente nos personagens (ignora chao e paredes)
+					local chars = {}
+					for _, p in ipairs(Players:GetPlayers()) do
+						if p ~= LocalPlayer and p.Character then
+							table.insert(chars, p.Character)
+						end
+					end
+					if #chars > 0 then
+						local charParams = RaycastParams.new()
+						charParams.FilterType = Enum.RaycastFilterType.Include
+						charParams.FilterDescendantsInstances = chars
+						charParams.IgnoreWater = true
+						local charHit = workspace:Raycast(ray.Origin, ray.Direction * 2000, charParams)
+						if charHit and charHit.Instance then
+							local model = charHit.Instance:FindFirstAncestorOfClass("Model")
+							local found = model and Players:GetPlayerFromCharacter(model)
+							if found and found ~= LocalPlayer then return found end
+						end
+					end
+					-- 2) fallback geometrico (funciona mesmo com CanCollide desligado)
+					local best, bestAlong = nil, math.huge
+					for _, p in ipairs(Players:GetPlayers()) do
+						if p ~= LocalPlayer then
+							local root = p.Character and p.Character:FindFirstChild("HumanoidRootPart")
+							if root then
+								local to = root.Position - ray.Origin
+								local along = to:Dot(ray.Direction)
+								if along > 0 and along < 2000 and along < bestAlong then
+									local closest = ray.Origin + ray.Direction * along
+									local off = (root.Position - closest).Magnitude
+									local tolerance = math.clamp(2.5 + along * 0.02, 3, 9)
+									if off <= tolerance then
+										best, bestAlong = p, along
+									end
+								end
+							end
+						end
+					end
+					return best
+				end
+
+				local targetPlayer = getTargetPlayer()
+
+				-- Raycast normal apenas como fallback de posicao do Teleport
+				local groundParams = RaycastParams.new()
+				groundParams.FilterType = Enum.RaycastFilterType.Exclude
+				groundParams.FilterDescendantsInstances = {LocalPlayer.Character}
+				groundParams.IgnoreWater = true
+				local groundHit = workspace:Raycast(ray.Origin, ray.Direction * 2000, groundParams)
 
 				local myChar = LocalPlayer.Character
 				local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
@@ -14785,18 +14932,18 @@ freecamToggle = createToggle(trollCategory, "Freecam", function(enabled)
 				if currentFreecamAction == "Teleport" then
 					if myRoot then
 						local tpPos
-						if result then
-							tpPos = result.Position
-						else
-							tpPos = ray.Origin + ray.Direction * 50
+						if targetPlayer then
+							local targetRoot = targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart")
+							if targetRoot then tpPos = (targetRoot.CFrame * CFrame.new(0, 0, 3)).Position end
 						end
-						-- Teleport to where crosshair points
+						if not tpPos and groundHit then tpPos = groundHit.Position end
+						if not tpPos then tpPos = ray.Origin + ray.Direction * 50 end
 						myRoot.Velocity = Vector3.zero
 						myRoot.CFrame = CFrame.new(tpPos + Vector3.new(0, 3, 0))
-						showMenuToast("Freecam", "Teleportado", C.TxtWhite)
+						showMenuToast("Freecam", targetPlayer and ("Teleportado ate " .. targetPlayer.DisplayName) or "Teleportado", C.TxtWhite)
 					end
 				elseif currentFreecamAction == "Push" then
-					local hitPart = result and result.Instance
+					local hitPart = targetPlayer and targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart")
 					if hitPart then
 						local hitModel = hitPart:FindFirstAncestorOfClass("Model")
 						if hitModel then
@@ -14845,7 +14992,7 @@ freecamToggle = createToggle(trollCategory, "Freecam", function(enabled)
 						return
 					end
 					-- Find player at crosshair
-					local hitPart = result and result.Instance
+					local hitPart = targetPlayer and targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart")
 					if hitPart then
 						local hitModel = hitPart:FindFirstAncestorOfClass("Model")
 						if hitModel then
@@ -16781,7 +16928,104 @@ NM_VALUE_KEYS = {
 	"fastHitInterval", "radarRange", "stealDistanceValue", "stealTargetMode", "tpCursorCooldownSeconds",
 	"autoKillAttackSpeed", "autofireCooldown", "spinbotSpeed", "spinbotLookDown",
 	"magnetDistance", "magnetRange", "hitboxSize", "npcHitboxSize", "npcTriggerCooldown",
+	"espColor", "espTracerColor", "espDistanceColor", "espNameColor", "skeletonColor", "weaponNameColor",
+	"npcEspColor", "npcEspNameColor", "npcEspDistanceColor", "npcEspTracerColor", "npcSkeletonColor", "npcWeaponNameColor",
 }
+
+NM_VARS = {
+	aimbotFOV = { get = function() return aimbotFOV end, set = function(v) aimbotFOV = v end },
+	aimbotSmooth = { get = function() return aimbotSmooth end, set = function(v) aimbotSmooth = v end },
+	aimbotTarget = { get = function() return aimbotTarget end, set = function(v) aimbotTarget = v end },
+	aimbotOnlyVisible = { get = function() return aimbotOnlyVisible end, set = function(v) aimbotOnlyVisible = v end },
+	aimbotMobile = { get = function() return aimbotMobile end, set = function(v) aimbotMobile = v end },
+	aimbotTeamCheck = { get = function() return aimbotTeamCheck end, set = function(v) aimbotTeamCheck = v end },
+	espPosition = { get = function() return espPosition end, set = function(v) espPosition = v end },
+	espMode = { get = function() return espMode end, set = function(v) espMode = v end },
+	ESP_MAX_DISTANCE = { get = function() return ESP_MAX_DISTANCE end, set = function(v) ESP_MAX_DISTANCE = v end },
+	tracerMode = { get = function() return tracerMode end, set = function(v) tracerMode = v end },
+	espAutoEnabled = { get = function() return espAutoEnabled end, set = function(v) espAutoEnabled = v end },
+	npcEspMode = { get = function() return npcEspMode end, set = function(v) npcEspMode = v end },
+	npcTracerMode = { get = function() return npcTracerMode end, set = function(v) npcTracerMode = v end },
+	npcEspPosition = { get = function() return npcEspPosition end, set = function(v) npcEspPosition = v end },
+	npcAimbotFOV = { get = function() return npcAimbotFOV end, set = function(v) npcAimbotFOV = v end },
+	npcAimbotSmooth = { get = function() return npcAimbotSmooth end, set = function(v) npcAimbotSmooth = v end },
+	npcAimbotTarget = { get = function() return npcAimbotTarget end, set = function(v) npcAimbotTarget = v end },
+	speedBoostValue = { get = function() return speedBoostValue end, set = function(v) speedBoostValue = v end },
+	jumpPowerBoostValue = { get = function() return jumpPowerBoostValue end, set = function(v) jumpPowerBoostValue = v end },
+	freecamSpeed = { get = function() return freecamSpeed end, set = function(v) freecamSpeed = v end },
+	chatSpammerMessage = { get = function() return chatSpammerMessage end, set = function(v) chatSpammerMessage = v end },
+	chatSpammerInterval = { get = function() return chatSpammerInterval end, set = function(v) chatSpammerInterval = v end },
+	autoclickerInterval = { get = function() return autoclickerInterval end, set = function(v) autoclickerInterval = v end },
+	autoclickerMode = { get = function() return autoclickerMode end, set = function(v) autoclickerMode = v end },
+	autoclickerButton = { get = function() return autoclickerButton end, set = function(v) autoclickerButton = v end },
+	autoclickerFixedX = { get = function() return autoclickerFixedX end, set = function(v) autoclickerFixedX = v end },
+	autoclickerFixedY = { get = function() return autoclickerFixedY end, set = function(v) autoclickerFixedY = v end },
+	fastHitInterval = { get = function() return fastHitInterval end, set = function(v) fastHitInterval = v end },
+	radarRange = { get = function() return radarRange end, set = function(v) radarRange = v end },
+	stealDistanceValue = { get = function() return stealDistanceValue end, set = function(v) stealDistanceValue = v end },
+	stealTargetMode = { get = function() return stealTargetMode end, set = function(v) stealTargetMode = v end },
+	tpCursorCooldownSeconds = { get = function() return tpCursorCooldownSeconds end, set = function(v) tpCursorCooldownSeconds = v end },
+	autoKillAttackSpeed = { get = function() return autoKillAttackSpeed end, set = function(v) autoKillAttackSpeed = v end },
+	autofireCooldown = { get = function() return autofireCooldown end, set = function(v) autofireCooldown = v end },
+	spinbotSpeed = { get = function() return spinbotSpeed end, set = function(v) spinbotSpeed = v end },
+	spinbotLookDown = { get = function() return spinbotLookDown end, set = function(v) spinbotLookDown = v end },
+	magnetDistance = { get = function() return magnetDistance end, set = function(v) magnetDistance = v end },
+	magnetRange = { get = function() return magnetRange end, set = function(v) magnetRange = v end },
+	hitboxSize = { get = function() return hitboxSize end, set = function(v) hitboxSize = v end },
+	npcHitboxSize = { get = function() return npcHitboxSize end, set = function(v) npcHitboxSize = v end },
+	npcTriggerCooldown = { get = function() return npcTriggerCooldown end, set = function(v) npcTriggerCooldown = v end },
+	espColor = { get = function() return espColor end, set = function(v) espColor = v end },
+	espTracerColor = { get = function() return espTracerColor end, set = function(v) espTracerColor = v end },
+	espDistanceColor = { get = function() return espDistanceColor end, set = function(v) espDistanceColor = v end },
+	espNameColor = { get = function() return espNameColor end, set = function(v) espNameColor = v end },
+	skeletonColor = { get = function() return skeletonColor end, set = function(v) skeletonColor = v end },
+	weaponNameColor = { get = function() return weaponNameColor end, set = function(v) weaponNameColor = v end },
+	npcEspColor = { get = function() return npcEspColor end, set = function(v) npcEspColor = v end },
+	npcEspNameColor = { get = function() return npcEspNameColor end, set = function(v) npcEspNameColor = v end },
+	npcEspDistanceColor = { get = function() return npcEspDistanceColor end, set = function(v) npcEspDistanceColor = v end },
+	npcEspTracerColor = { get = function() return npcEspTracerColor end, set = function(v) npcEspTracerColor = v end },
+	npcSkeletonColor = { get = function() return npcSkeletonColor end, set = function(v) npcSkeletonColor = v end },
+	npcWeaponNameColor = { get = function() return npcWeaponNameColor end, set = function(v) npcWeaponNameColor = v end },
+	hitboxColor = { get = function() return _G.hitboxColor end, set = function(v) _G.hitboxColor = v end },
+}
+
+-- Alguns executores rodam com setfenv / _ENV proprio (diferente de _G).
+-- Escolhe o environment que realmente contem as variaveis do menu (aimbotFOV ja existe aqui).
+do
+	local candidate = (type(getfenv) == "function" and getfenv(1)) or _ENV or _G
+	if type(candidate) ~= "table" or candidate.aimbotFOV == nil then
+		candidate = _ENV or _G
+	end
+	if type(candidate) ~= "table" or candidate.aimbotFOV == nil then
+		candidate = _G
+	end
+	NM_GLOBAL_ENV = candidate
+end
+
+-- Le/escreve diretamente nas variaveis e tambem em ambos os environments.
+function nmGetVar(key)
+	local entry = NM_VARS[key]
+	if entry and entry.get then
+		local ok, val = pcall(entry.get)
+		if ok and val ~= nil then return val end
+	end
+	local ok, value = pcall(function() return NM_GLOBAL_ENV[key] end)
+	if ok and value ~= nil then return value end
+	local ok2, value2 = pcall(function() return _G[key] end)
+	if ok2 then return value2 end
+	return nil
+end
+
+function nmSetVar(key, value)
+	local entry = NM_VARS[key]
+	if entry and entry.set then
+		pcall(entry.set, value)
+	end
+	pcall(function() NM_GLOBAL_ENV[key] = value end)
+	pcall(function()
+		if _G[key] ~= value then _G[key] = value end
+	end)
+end
 
 function nmSetStatus(message, color)
 	if not nmStatusLabel then return end
@@ -16806,33 +17050,60 @@ function nmDecodeBind(data)
 	return nil, "None"
 end
 
+-- IMPORTANTE: usar chaves TEXTO. Indices numericos viram chaves de string no JSON
+-- (ex.: [2] -> "2") e o Decode antigo nao encontrava mais os componentes.
 function nmEncodeValue(value)
 	local t = typeof(value)
-	if t == "Color3" then return {t = "Color3", value.R, value.G, value.B} end
-	if t == "Vector2" then return {t = "Vector2", value.X, value.Y} end
-	if t == "Vector3" then return {t = "Vector3", value.X, value.Y, value.Z} end
-	if t == "UDim2" then return {t = "UDim2", value.X.Scale, value.X.Offset, value.Y.Scale, value.Y.Offset} end
-	if t == "EnumItem" then return {t = "Enum", tostring(value.EnumType):gsub("^Enum%.", ""), value.Name} end
+	if t == "Color3" then return {t = "Color3", r = value.R, g = value.G, b = value.B} end
+	if t == "Vector2" then return {t = "Vector2", x = value.X, y = value.Y} end
+	if t == "Vector3" then return {t = "Vector3", x = value.X, y = value.Y, z = value.Z} end
+	if t == "UDim2" then return {t = "UDim2", xs = value.X.Scale, xo = value.X.Offset, ys = value.Y.Scale, yo = value.Y.Offset} end
+	if t == "EnumItem" then return {t = "Enum", enum = tostring(value.EnumType):gsub("^Enum%.", ""), name = value.Name} end
 	if type(value) == "number" or type(value) == "string" or type(value) == "boolean" then return value end
 	return nil
 end
 
+function nmSavedField(saved, letter, numericIndex)
+	return saved[letter] or saved[tostring(numericIndex)] or saved[numericIndex]
+end
+
 function nmDecodeValue(saved)
+	if typeof(saved) == "Color3" then return saved end
 	if type(saved) ~= "table" then
 		if type(saved) == "number" or type(saved) == "string" or type(saved) == "boolean" then return saved end
 		return nil
 	end
-	if saved.t == "Color3" and type(saved[2]) == "number" and type(saved[3]) == "number" and type(saved[4]) == "number" then
-		return Color3.new(math.clamp(saved[2], 0, 1), math.clamp(saved[3], 0, 1), math.clamp(saved[4], 0, 1))
-	elseif saved.t == "Vector2" and type(saved[2]) == "number" and type(saved[3]) == "number" then
-		return Vector2.new(saved[2], saved[3])
-	elseif saved.t == "Vector3" and type(saved[2]) == "number" and type(saved[3]) == "number" and type(saved[4]) == "number" then
-		return Vector3.new(saved[2], saved[3], saved[4])
-	elseif saved.t == "UDim2" and type(saved[2]) == "number" and type(saved[3]) == "number" and type(saved[4]) == "number" and type(saved[5]) == "number" then
-		return UDim2.new(saved[2], saved[3], saved[4], saved[5])
-	elseif saved.t == "Enum" and type(saved[2]) == "string" and type(saved[3]) == "string" then
-		local enumType = Enum[saved[2]]
-		return enumType and enumType[saved[3]] or nil
+	if saved.t == "Color3" then
+		local r = nmSavedField(saved, "r", 2)
+		local g = nmSavedField(saved, "g", 3)
+		local b = nmSavedField(saved, "b", 4)
+		if type(r) == "number" and type(g) == "number" and type(b) == "number" then
+			return Color3.new(math.clamp(r, 0, 1), math.clamp(g, 0, 1), math.clamp(b, 0, 1))
+		end
+	elseif saved.t == "Vector2" then
+		local x = nmSavedField(saved, "x", 2)
+		local y = nmSavedField(saved, "y", 3)
+		if type(x) == "number" and type(y) == "number" then return Vector2.new(x, y) end
+	elseif saved.t == "Vector3" then
+		local x = nmSavedField(saved, "x", 2)
+		local y = nmSavedField(saved, "y", 3)
+		local z = nmSavedField(saved, "z", 4)
+		if type(x) == "number" and type(y) == "number" and type(z) == "number" then return Vector3.new(x, y, z) end
+	elseif saved.t == "UDim2" then
+		local xs = nmSavedField(saved, "xs", 2)
+		local xo = nmSavedField(saved, "xo", 3)
+		local ys = nmSavedField(saved, "ys", 4)
+		local yo = nmSavedField(saved, "yo", 5)
+		if type(xs) == "number" and type(xo) == "number" and type(ys) == "number" and type(yo) == "number" then
+			return UDim2.new(xs, xo, ys, yo)
+		end
+	elseif saved.t == "Enum" then
+		local enumName = saved.enum or saved[2]
+		local itemName = saved.name or saved[3]
+		if type(enumName) == "string" and type(itemName) == "string" then
+			local enumType = Enum[enumName]
+			return enumType and enumType[itemName] or nil
+		end
 	end
 	return nil
 end
@@ -16841,24 +17112,87 @@ function nmEmptyStore()
 	return {profiles = {}, ui = {}, last = nil}
 end
 
+-- Cache do store: uma leitura falha NUNCA pode apagar os perfis salvos.
+nmStoreCache = nil
+nmStorePath = nil
+
+-- Alguns executores trocam a raiz de arquivos entre lugares (jogos diferentes).
+-- Gravar/ler em mais de um caminho aumenta a chance do perfil sobreviver ao rejoin.
+function nmStorePaths()
+	local paths = {}
+	local function add(path)
+		if type(path) ~= "string" or path == "" then return end
+		for _, existing in ipairs(paths) do
+			if existing == path then return end
+		end
+		table.insert(paths, path)
+	end
+	add(nmStoreFile)
+	if type(makefolder) == "function" and type(isfolder) == "function" then
+		pcall(function()
+			if not isfolder("night_menu") then makefolder("night_menu") end
+		end)
+		add("night_menu/" .. nmStoreFile)
+	end
+	return paths
+end
+
 function nmReadStore()
-	if not isfile or not readfile or not isfile(nmStoreFile) then return nmEmptyStore() end
-	local ok, content = pcall(function() return readfile(nmStoreFile) end)
-	if not ok or type(content) ~= "string" then return nmEmptyStore() end
-	local ok2, data = pcall(function() return HttpService:JSONDecode(content) end)
-	if not ok2 or type(data) ~= "table" then return nmEmptyStore() end
-	if type(data.profiles) ~= "table" then data.profiles = {} end
-	if type(data.ui) ~= "table" then data.ui = {} end
-	return data
+	-- O store em memoria e sempre o mais recente (ele e atualizado em nmWriteStore).
+	-- Reler o disco logo apos salvar pode devolver conteudo antigo em alguns executores.
+	if nmStoreCache then return nmStoreCache end
+	if not readfile then return nmEmptyStore() end
+	for _, path in ipairs(nmStorePaths()) do
+		local okContent, content = pcall(readfile, path)
+		if okContent and type(content) == "string" and content ~= "" then
+			local okData, data = pcall(function() return HttpService:JSONDecode(content) end)
+			if okData and type(data) == "table" then
+				if type(data.profiles) ~= "table" then data.profiles = {} end
+				if type(data.ui) ~= "table" then data.ui = {} end
+				nmStorePath = path
+				nmStoreCache = data
+				return data
+			end
+		end
+	end
+	return nmStoreCache or nmEmptyStore()
 end
 
 function nmWriteStore(store)
-	if not writefile then return false, "executor has no writefile" end
+	if type(store) ~= "table" then return false, "invalid store" end
+	store.profiles = type(store.profiles) == "table" and store.profiles or {}
+	store.ui = type(store.ui) == "table" and store.ui or {}
+	if not writefile then
+		nmStoreCache = store
+		return false, "executor has no writefile"
+	end
 	local ok, content = pcall(function() return HttpService:JSONEncode(store) end)
 	if not ok then return false, tostring(content) end
-	local ok2, err = pcall(function() writefile(nmStoreFile, content) end)
-	if not ok2 then return false, tostring(err) end
+	local wrote, lastErr = false, nil
+	for _, path in ipairs(nmStorePaths()) do
+		local ok2, err = pcall(function() writefile(path, content) end)
+		if ok2 then
+			wrote = true
+			nmStorePath = path
+		else
+			lastErr = tostring(err)
+		end
+	end
+	nmStoreCache = store
+	if not wrote then return false, lastErr or "writefile failed" end
 	return true
+end
+
+-- Confere (sem usar o cache) se o nome realmente chegou ao arquivo no disco.
+function nmVerifyProfileOnDisk(name)
+	if not readfile or type(name) ~= "string" then return false end
+	for _, path in ipairs(nmStorePaths()) do
+		local ok, content = pcall(readfile, path)
+		if ok and type(content) == "string" and content:find(name, 1, true) then
+			return true
+		end
+	end
+	return false
 end
 
 function nmCleanName(name)
@@ -16866,6 +17200,19 @@ function nmCleanName(name)
 	local clean = name:gsub("^%s+", ""):gsub("%s+$", "")
 	if clean == "" then return nil end
 	return clean:sub(1, 32)
+end
+
+-- Um unico ponto de resolucao de nome.
+-- SAVE nao permite cair no nome de outro perfil; LOAD/DELETE podem usar a selecao.
+function nmResolveName(explicit, allowSelected)
+	local clean = nmCleanName(explicit)
+	if clean then return clean end
+	if nmNameInput then
+		clean = nmCleanName(nmNameInput.Text)
+		if clean then return clean end
+	end
+	if allowSelected then return nmCleanName(nmSelected) end
+	return nil
 end
 
 function nmCollectSettings()
@@ -16879,12 +17226,17 @@ function nmCollectSettings()
 		end
 	end
 	for _, key in ipairs(NM_VALUE_KEYS) do
-		local encoded = nmEncodeValue(_G[key])
+		local encoded = nmEncodeValue(nmGetVar(key))
 		if encoded ~= nil then cfg.values[key] = encoded end
 	end
 	if _G.hitboxColor then cfg.values.hitboxColor = nmEncodeValue(_G.hitboxColor) end
 	if FlySystem then cfg.values.flySpeed = FlySystem.speed end
 	cfg.values.friendUserIds = collectMenuFriendIds()
+	local valueCount = 0
+	for _ in pairs(cfg.values) do valueCount = valueCount + 1 end
+	print("[NIGHT CONFIG] coletados " .. valueCount .. " valores | FOV=" .. tostring(cfg.values.aimbotFOV)
+		.. " Smooth=" .. tostring(cfg.values.aimbotSmooth)
+		.. " CorBox=" .. tostring(cfg.values.espColor and cfg.values.espColor.t or "nil"))
 	return cfg
 end
 
@@ -16894,18 +17246,50 @@ function nmSyncLabels()
 		if fovInput then fovInput.Text = tostring(aimbotFOV) end
 		if fovFill then fovFill.Size = UDim2.fromScale(math.clamp(aimbotFOV / 200, 0, 1), 1) end
 		if smoothLabel then smoothLabel.Text = tostring(aimbotSmooth) end
+		if smoothFill then smoothFill.Size = UDim2.fromScale(math.clamp(aimbotSmooth / 20, 0, 1), 1) end
 		if npcFovValue then npcFovValue.Text = tostring(npcAimbotFOV) end
+		if npcFovFill then npcFovFill.Size = UDim2.fromScale(math.clamp(npcAimbotFOV / 200, 0, 1), 1) end
 		if npcSmoothValue then npcSmoothValue.Text = tostring(npcAimbotSmooth) end
+		if npcSmoothFill then npcSmoothFill.Size = UDim2.fromScale(math.clamp(npcAimbotSmooth / 20, 0, 1), 1) end
 		if hitboxSliderLabel then hitboxSliderLabel.Text = "Size: " .. tostring(hitboxSize) end
 		if hitboxSliderInput then hitboxSliderInput.Text = tostring(hitboxSize) end
 		if npcHitboxSizeLabel then npcHitboxSizeLabel.Text = "NPC Size: " .. tostring(npcHitboxSize) end
 		if npcHitboxSizeInput then npcHitboxSizeInput.Text = tostring(npcHitboxSize) end
+		if espDistLabel then espDistLabel.Text = tostring(ESP_MAX_DISTANCE) end
+		if espDistFill then espDistFill.Size = UDim2.fromScale(math.clamp((ESP_MAX_DISTANCE - 50) / 450, 0, 1), 1) end
+		if npcEspDistLabel then npcEspDistLabel.Text = tostring(ESP_MAX_DISTANCE) end
+		if npcEspDistFill then npcEspDistFill.Size = UDim2.fromScale(math.clamp((ESP_MAX_DISTANCE - 50) / 450, 0, 1), 1) end
+		if modeBtn then modeBtn.Text = "Modo: " .. tostring(espMode) end
+		if npcModeBtn then npcModeBtn.Text = "Modo: " .. tostring(npcEspMode) end
+		if tracerModeBtn then tracerModeBtn.Text = "Modo Tracer: " .. tostring(tracerMode) end
+		if npcTracerModeBtn then npcTracerModeBtn.Text = "Modo Tracer: " .. tostring(npcTracerMode) end
+		if positionBtn then positionBtn.Text = "Position: " .. tostring(espPosition) end
+		if npcPositionBtn then npcPositionBtn.Text = "Position: " .. tostring(npcEspPosition) end
+		if targetDropdownBtn then targetDropdownBtn.Text = "Target: " .. tostring(aimbotTarget) end
+		if npcTargetBtn then npcTargetBtn.Text = "Target: " .. tostring(npcAimbotTarget) end
 		local pc = gui and gui:FindFirstChild("FOVCircle")
 		if pc then pc.Size = UDim2.fromOffset(aimbotFOV * 3, aimbotFOV * 3) end
 		local nc = gui and gui:FindFirstChild("NpcFOVCircle")
 		if nc then nc.Size = UDim2.fromOffset(npcAimbotFOV * 3, npcAimbotFOV * 3) end
 		if hitboxColorBtn and _G.hitboxColor then hitboxColorBtn.BackgroundColor3 = _G.hitboxColor end
 		if flySpeedInput and FlySystem then flySpeedInput.Text = tostring(FlySystem.speed) end
+
+		local colorButtons = {
+			{nameColorBtn, espNameColor}, {weaponColorBtn, weaponNameColor},
+			{boxColorBtn, espColor}, {tracerColorBtn, espTracerColor},
+			{distColorBtn, espDistanceColor}, {skeletonColorBtn, skeletonColor},
+			{npcNameColorBtn, npcEspNameColor}, {npcWeaponColorBtn, npcWeaponNameColor},
+			{npcBoxColorBtn, npcEspColor}, {npcTracerColorBtn, npcEspTracerColor},
+			{npcDistColorBtn, npcEspDistanceColor}, {npcSkeletonColorBtn, npcSkeletonColor},
+		}
+		for _, pair in ipairs(colorButtons) do
+			local btn, color = pair[1], pair[2]
+			if btn and typeof(color) == "Color3" then
+				btn.BackgroundColor3 = color
+				local brightness = color.R * 0.299 + color.G * 0.587 + color.B * 0.114
+				btn.TextColor3 = brightness > 0.72 and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
+			end
+		end
 	end)
 end
 
@@ -16935,7 +17319,7 @@ function nmApplySettings(cfg)
 		for key, saved in pairs(cfg.values) do
 			if key ~= "friendUserIds" then
 				local decoded = nmDecodeValue(saved)
-				if decoded ~= nil then _G[key] = decoded end
+				if decoded ~= nil then nmSetVar(key, decoded) end
 			end
 		end
 		if type(cfg.values.flySpeed) == "number" and FlySystem then
@@ -16956,18 +17340,38 @@ function nmApplySettings(cfg)
 			end)
 		end
 	end
+	print("[NIGHT CONFIG] aplicados | FOV=" .. tostring(aimbotFOV) .. " Smooth=" .. tostring(aimbotSmooth)
+		.. " NPC_FOV=" .. tostring(npcAimbotFOV) .. " NPC_Smooth=" .. tostring(npcAimbotSmooth)
+		.. " CorBox=" .. tostring(espColor))
 	pcall(function() if refreshKeybindManager then refreshKeybindManager() end end)
 	nmSyncLabels()
+	-- Aplica imediatamente cores/modos carregados nos visuais ja existentes
+	pcall(function()
+		for _, plr in ipairs(Players:GetPlayers()) do
+			if plr.Character then pcall(refreshESPForPlayer, plr) end
+		end
+	end)
 end
 
 function nmSaveProfile(name)
-	local clean = nmCleanName(name or (nmNameInput and nmNameInput.Text))
+	local raw = name
+	if raw == nil and nmNameInput then raw = nmNameInput.Text end
+	if type(raw) == "string" and #raw > 32 then
+		nmSetStatus("nome longo cortado para 32 caracteres", Color3.fromRGB(255, 190, 100))
+	end
+	local clean = nmResolveName(name, false)
 	if not clean then
 		nmSetStatus("type a profile name first", Color3.fromRGB(255, 120, 120))
 		return false
 	end
+	local okCollect, cfg = pcall(nmCollectSettings)
+	if not okCollect or type(cfg) ~= "table" then
+		nmSetStatus("save failed: " .. tostring(cfg), Color3.fromRGB(255, 120, 120))
+		return false
+	end
 	local store = nmReadStore()
-	store.profiles[clean] = nmCollectSettings()
+	local isUpdate = type(store.profiles[clean]) == "table"
+	store.profiles[clean] = cfg
 	store.last = clean
 	local ok, err = nmWriteStore(store)
 	if not ok then
@@ -16975,14 +17379,22 @@ function nmSaveProfile(name)
 		return false
 	end
 	nmSelected = clean
+	-- Mostra exatamente qual nome foi salvo (evita sobrescrever outro perfil sem aviso)
+	if nmNameInput then nmNameInput.Text = clean end
 	nmRefreshProfiles()
-	nmSetStatus("saved: " .. clean, Color3.fromRGB(170, 255, 170))
-	showMenuToast("Profile Saved", clean, Color3.fromRGB(170, 255, 170))
+	local diskOk = nmVerifyProfileOnDisk(clean)
+	if diskOk then
+		local statusText = isUpdate and ("updated: " .. clean) or ("saved: " .. clean)
+		nmSetStatus(statusText, Color3.fromRGB(170, 255, 170))
+	else
+		nmSetStatus("salvo na memoria, mas o arquivo nao confirmou: " .. clean, Color3.fromRGB(255, 190, 100))
+	end
+	showMenuToast(isUpdate and "Profile Updated" or "Profile Saved", clean, Color3.fromRGB(170, 255, 170))
 	return true
 end
 
 function nmLoadProfile(name)
-	local clean = nmCleanName(name or (nmNameInput and nmNameInput.Text) or nmSelected)
+	local clean = nmResolveName(name, true)
 	if not clean then
 		nmSetStatus("select or type a profile name", Color3.fromRGB(255, 120, 120))
 		return false
@@ -17005,7 +17417,7 @@ function nmLoadProfile(name)
 end
 
 function nmDeleteProfile(name)
-	local clean = nmCleanName(name or (nmNameInput and nmNameInput.Text) or nmSelected)
+	local clean = nmResolveName(name, true)
 	if not clean then
 		nmSetStatus("select or type a profile name", Color3.fromRGB(255, 120, 120))
 		return false
@@ -17028,17 +17440,120 @@ function nmDeleteProfile(name)
 	return true
 end
 
+function nmResetToDefault()
+	-- Desliga todos os toggles
+	for key, entry in pairs(nmToggles) do
+		if entry and entry.setState then
+			pcall(function() entry.setState(false, "force") end)
+		end
+	end
+	-- Reseta binds
+	for id, entry in pairs(nmBinds) do
+		if entry and entry.setBind then
+			pcall(function()
+				if id == "aimbot" then
+					entry.setBind(Enum.UserInputType.MouseButton2, "MouseRight")
+				else
+					entry.setBind(nil, "None")
+				end
+				if entry.refreshBindTag then entry.refreshBindTag() end
+			end)
+		end
+	end
+	-- Restaura valores padrao
+	aimbotFOV = 100
+	aimbotSmooth = 5
+	aimbotTarget = "Head"
+	aimbotOnlyVisible = false
+	aimbotMobile = false
+	aimbotTeamCheck = true
+	espPosition = "Topo"
+	espMode = "Cheio"
+	ESP_MAX_DISTANCE = 500
+	tracerMode = "Sky"
+	espAutoEnabled = false
+	espColor = Color3.fromRGB(255, 0, 0)
+	espTracerColor = Color3.fromRGB(255, 255, 255)
+	espDistanceColor = Color3.fromRGB(255, 255, 0)
+	espNameColor = Color3.fromRGB(255, 255, 255)
+	skeletonColor = Color3.fromRGB(255, 0, 0)
+	weaponNameColor = Color3.fromRGB(255, 200, 100)
+	npcEspMode = "Cheio"
+	npcTracerMode = "Sky"
+	npcEspPosition = "Topo"
+	npcAimbotFOV = 150
+	npcAimbotSmooth = 5
+	npcAimbotTarget = "Head"
+	npcEspColor = Color3.fromRGB(255, 165, 0)
+	npcEspNameColor = Color3.fromRGB(255, 255, 255)
+	npcEspDistanceColor = Color3.fromRGB(255, 255, 0)
+	npcEspTracerColor = Color3.fromRGB(255, 255, 255)
+	npcSkeletonColor = Color3.fromRGB(255, 165, 0)
+	npcWeaponNameColor = Color3.fromRGB(255, 200, 100)
+	hitboxSize = 25
+	npcHitboxSize = 25
+	speedBoostValue = 50
+	jumpPowerBoostValue = 100
+	_G.hitboxColor = Color3.fromRGB(35, 35, 42)
+
+	-- Sincroniza variaveis no ambiente
+	if type(NM_VARS) == "table" then
+		for key, entry in pairs(NM_VARS) do
+			pcall(function()
+				local val = entry.get()
+				pcall(function() NM_GLOBAL_ENV[key] = val end)
+				pcall(function() _G[key] = val end)
+			end)
+		end
+	end
+
+	pcall(function() if refreshKeybindManager then refreshKeybindManager() end end)
+	nmSyncLabels()
+	pcall(function()
+		for _, plr in ipairs(Players:GetPlayers()) do
+			if plr.Character and refreshESPForPlayer then pcall(refreshESPForPlayer, plr) end
+		end
+	end)
+	nmSelected = nil
+	if nmNameInput then nmNameInput.Text = "" end
+	nmUpdateProfileHighlights()
+	nmSetStatus("menu resetado para o padrao (default)", Color3.fromRGB(170, 255, 170))
+	showMenuToast("Default Config", "Menu resetado para os valores padrao", Color3.fromRGB(170, 220, 255))
+end
+
+nmProfileRows = {}
+nmProfileListSignature = nil
+
+function nmUpdateProfileHighlights()
+	for name, row in pairs(nmProfileRows) do
+		if row and row.Parent then
+			row.BackgroundColor3 = nmSelected == name and C.BindActive or C.BgCard
+		end
+	end
+end
+
 function nmRefreshProfiles()
 	if not nmListScroll then return end
+	local store = nmReadStore()
+	local names = {}
+	for name in pairs(store.profiles) do table.insert(names, name) end
+	table.sort(names, function(a, b) return tostring(a):lower() < tostring(b):lower() end)
+
+	local signature = table.concat(names, "\0")
+	-- Selecionar um perfil nao deve reconstruir a lista (evita clique cair na linha errada)
+	if signature == nmProfileListSignature and next(nmProfileRows) then
+		nmUpdateProfileHighlights()
+		return
+	end
+
 	for _, child in ipairs(nmListScroll:GetChildren()) do
 		if not child:IsA("UIListLayout") and not child:IsA("UIPadding") then
 			child:Destroy()
 		end
 	end
-	local store = nmReadStore()
-	local names = {}
-	for name in pairs(store.profiles) do table.insert(names, name) end
-	table.sort(names, function(a, b) return tostring(a):lower() < tostring(b):lower() end)
+	nmProfileRows = {}
+	nmProfileListSignature = signature
+
 	if #names == 0 then
 		New("TextLabel", {
 			BackgroundTransparency = 1,
@@ -17049,13 +17564,17 @@ function nmRefreshProfiles()
 			TextXAlignment = Enum.TextXAlignment.Left,
 			Text = "No saved profiles yet.",
 		}, nmListScroll)
+		nmListScroll.CanvasPosition = Vector2.new(0, 0)
 		return
 	end
-	for _, name in ipairs(names) do
+
+	for index, name in ipairs(names) do
+		local capturedName = name
 		local row = New("Frame", {
-			BackgroundColor3 = nmSelected == name and C.BindActive or C.BgCard,
+			BackgroundColor3 = nmSelected == capturedName and C.BindActive or C.BgCard,
 			BorderSizePixel = 0,
 			Size = UDim2.new(1, -8, 0, 38),
+			LayoutOrder = index,
 		}, nmListScroll)
 		Corner(7, row)
 		Stroke(C.Divider, 1, row).Transparency = 0.25
@@ -17068,13 +17587,14 @@ function nmRefreshProfiles()
 			TextSize = 12,
 			TextColor3 = C.TxtWhite,
 			TextXAlignment = Enum.TextXAlignment.Left,
-			Text = name,
+			Text = capturedName,
 			AutoButtonColor = false,
 		}, row)
 		nameBtn.MouseButton1Click:Connect(function()
-			nmSelected = name
-			if nmNameInput then nmNameInput.Text = name end
-			nmRefreshProfiles()
+			nmSelected = capturedName
+			if nmNameInput then nmNameInput.Text = capturedName end
+			nmUpdateProfileHighlights()
+			nmSetStatus("selected: " .. capturedName, Color3.fromRGB(170, 220, 255))
 		end)
 
 		local loadBtn = New("TextButton", {
@@ -17089,7 +17609,7 @@ function nmRefreshProfiles()
 			AutoButtonColor = false,
 		}, row)
 		Corner(5, loadBtn)
-		loadBtn.MouseButton1Click:Connect(function() nmLoadProfile(name) end)
+		loadBtn.MouseButton1Click:Connect(function() nmLoadProfile(capturedName) end)
 
 		local delBtn = New("TextButton", {
 			BackgroundColor3 = C.BindBg,
@@ -17103,8 +17623,11 @@ function nmRefreshProfiles()
 			AutoButtonColor = false,
 		}, row)
 		Corner(5, delBtn)
-		delBtn.MouseButton1Click:Connect(function() nmDeleteProfile(name) end)
+		delBtn.MouseButton1Click:Connect(function() nmDeleteProfile(capturedName) end)
+
+		nmProfileRows[capturedName] = row
 	end
+	nmListScroll.CanvasPosition = Vector2.new(0, 0)
 end
 
 function saveLibrarySettings()
@@ -17411,8 +17934,8 @@ RunService.RenderStepped:Connect(function()
 		clearAllESPVisuals()
 	end
 
-	-- NPC ESP (throttled scan) — also scan when aimbot needs targets
-	if npcEspEnabled or npcAimbotEnabled or npcTriggerEnabled or npcHitboxEnabled or npcShowWeapon then
+	-- NPC ESP (throttled scan) — also scan when aimbot needs targets or any sub-feature is active
+	if npcEspEnabled or npcShowSkeleton or npcShowBox or npcShowTracers or npcShowDistance or npcShowName or npcShowHealth or npcShowWeapon or npcAimbotEnabled or npcTriggerEnabled or npcHitboxEnabled then
 		local now = tick()
 		if now - npcEspLastScanTime >= npcEspScanInterval then
 			npcEspLastScanTime = now
@@ -17625,7 +18148,8 @@ end)
 nmMakeButton(configInfoCard, "CLEAR", 0.42, 458, 0.26, function()
 	if nmNameInput then nmNameInput.Text = "" end
 	nmSelected = nil
-	nmSetStatus("name cleared", Color3.fromRGB(170, 255, 170))
+	nmRefreshProfiles()
+	nmSetStatus("name cleared - digite um nome novo para criar config", Color3.fromRGB(170, 255, 170))
 end)
 
 nmMakeButton(configInfoCard, "DELETE", 0.70, 458, 0.30, function()
@@ -18124,6 +18648,10 @@ nmMakeButton(configInfoCard, "LOAD", 0, 500, 1, function()
 	nmLoadProfile()
 end)
 
+nmMakeButton(configInfoCard, "RESET DEFAULT", 0, 546, 1, function()
+	nmResetToDefault()
+end)
+
 nmMakeButton(configInfoCard, "Unload", 0, 662, 1, function()
 	unloadNightMenu()
 end)
@@ -18211,11 +18739,11 @@ LocalPlayer.Idled:Connect(function()
 end)
 
 -- ========= DISCORD WEBHOOK - Night Hub Tracker =========
-local NIGHT_WEBHOOK_URL = "https://discord.com/api/webhooks/1528499074628587740/UMkw_C1tqn6HbWEaxlYFmNrEwnMfdSm6Rxk-Wl7ieANQhNpoBR05SarZYUQ3KKu7b4uQ"
-local NIGHT_HUB_VERSION = "v2.0"
-local lastMessageId = nil
+NIGHT_WEBHOOK_URL = "https://discord.com/api/webhooks/1528499074628587740/UMkw_C1tqn6HbWEaxlYFmNrEwnMfdSm6Rxk-Wl7ieANQhNpoBR05SarZYUQ3KKu7b4uQ"
+NIGHT_HUB_VERSION = "v2.0"
+lastMessageId = nil
 
-local function getGameInfo()
+function getGameInfo()
 	local gameId = game.PlaceId
 	local gameName = "Unknown"
 	pcall(function()
@@ -18224,7 +18752,7 @@ local function getGameInfo()
 	return gameName, gameId
 end
 
-local function makePlayerList()
+function makePlayerList()
 	local list = ""
 	for _, p in ipairs(Players:GetPlayers()) do
 		list = list .. "🟢 " .. p.Name .. "\n"
@@ -18233,7 +18761,7 @@ local function makePlayerList()
 	return list
 end
 
-local function buildPayload(title, description, color, fields)
+function buildPayload(title, description, color, fields)
 	return {
 		embeds = {{
 			title = title,
@@ -18248,7 +18776,7 @@ local function buildPayload(title, description, color, fields)
 	}
 end
 
-local function sendWebRequest(url, method, body)
+function sendWebRequest(url, method, body)
 	local ok, result = pcall(function()
 		local response
 		if syn and syn.request then
@@ -18267,7 +18795,7 @@ local function sendWebRequest(url, method, body)
 	return ok, result
 end
 
-local function sendOrEditWebhook(title, description, color, fields)
+function sendOrEditWebhook(title, description, color, fields)
 	task.spawn(function()
 		local json = HttpService:JSONEncode(buildPayload(title, description, color, fields))
 
@@ -18349,6 +18877,22 @@ task.defer(function()
 	refreshLocalizedMenuText()
 	updateThemeStatus()
 	nmRefreshProfiles()
+
+	-- O menu sempre inicia no estado DEFAULT (nao restaura perfil automaticamente)
+	task.spawn(function()
+		local store = nmReadStore()
+		local names = {}
+		if type(store) == "table" and type(store.profiles) == "table" then
+			for name in pairs(store.profiles) do table.insert(names, name) end
+		end
+		if nmNameInput then nmNameInput.Text = "" end
+		pcall(nmSyncLabels)
+		if #names == 0 then
+			nmSetStatus("nenhuma config salva (modo default)", Color3.fromRGB(255, 190, 100))
+		else
+			nmSetStatus("menu pronto em modo default (" .. #names .. " configs)", Color3.fromRGB(170, 255, 170))
+		end
+	end)
 end)
 
 end
