@@ -1428,18 +1428,6 @@ function setStealDistanceValue(newValue)
 	return true
 end
 
-CONFIG_TOGGLE_KEY_ALIASES = {
-	distance_esp = "distance_m",
-	distanceesp = "distance_m",
-	show_distance = "distance_m",
-	antikick = "anti_kick",
-	anti_kick_toggle = "anti_kick",
-	antiragdoll = "anti_ragdoll",
-	anti_ragdoll_toggle = "anti_ragdoll",
-	faststeal = "fast_steal",
-	steal_fast = "fast_steal",
-}
-
 function isPromptInteractable(prompt)
 	if not prompt or not prompt.Parent or not prompt.Enabled then return false end
 	local allowedDistance = (prompt.MaxActivationDistance or 10) + 1.5
@@ -1655,7 +1643,7 @@ function tryInstantInteractPrompt(prompt)
 	end)
 end
 
-function makeConfigKey(labelText)
+function nmMakeSettingKey(labelText)
 	if not labelText then return nil end
 
 	local key = tostring(labelText):lower():gsub("[^%w]+", "_"):gsub("^_+", ""):gsub("_+$", "")
@@ -1666,9 +1654,9 @@ function makeConfigKey(labelText)
 	return key
 end
 
-function registerConfigBind(bindId, entry)
+function nmRegisterSettingBind(bindId, entry)
 	if not bindId or type(entry) ~= "table" then return end
-	configBindRegistry[bindId] = entry
+	nmBinds[bindId] = entry
 end
 
 -- Free-Fly manual
@@ -1704,6 +1692,8 @@ boxes = {}           -- [Character] = BoxHandles
 tracers = {}         -- [Character] = Line
 distanceLabels = {}  -- [Character] = Drawing.Text
 nameLabels = {}      -- [Character] = Drawing.Text
+weaponLabels = {}    -- [Character] = Drawing.Text (nome da arma na mão)
+showWeapon = false
 healthBars = {}      -- [Character] = {bg, fill} - Barras de vida 2D
 espNameColor = Color3.fromRGB(255, 255, 255) -- Cor padrÃƒÂ£o do nome (branco)
 skeletonColor = Color3.fromRGB(255, 0, 0)
@@ -1825,6 +1815,8 @@ npcHighlights = {}     -- [Model] = Highlight
 npcBoxes = {}          -- [Model] = BillboardGui
 npcNameLabels = {}     -- [Model] = Drawing.Text
 npcDistanceLabels = {} -- [Model] = Drawing.Text
+npcWeaponLabels = {}   -- [Model] = Drawing.Text (nome da arma na mão)
+npcShowWeapon = false
 npcHealthBars = {}     -- [Model] = {bg, fill}
 npcVisibilityCache = setmetatable({}, {__mode = "k"}) -- [Model] = {visible, at} - weak keys, GC limpa sozinho
 
@@ -1850,6 +1842,9 @@ npcTriggerBindString = "None"
 npcHitboxEnabled = false
 npcHitboxBind = nil
 npcHitboxBindString = "None"
+npcHitboxSize = 10 -- tamanho independente da hitbox dos NPCs
+npcHitboxSizeLabel = nil
+npcHitboxSizeInput = nil
 _G.npcHitboxOriginalSizes = {}
 
 -- Fly-to target
@@ -4100,6 +4095,86 @@ function ensureNameLabel(character, player)
 	label.Visible = true
 end
 
+-- ========= WEAPON ESP (nome da arma na mao - players) =========
+weaponDisplayCache = setmetatable({}, {__mode = "k"}) -- [character] = {text, at}
+
+function getEquippedWeaponDisplay(character)
+	if not character then return nil end
+	local cached = weaponDisplayCache[character]
+	if cached and tick() - cached.at < 0.4 then return cached.text end
+
+	local tool = character:FindFirstChildOfClass("Tool")
+	if not tool then
+		for _, obj in ipairs(character:GetDescendants()) do
+			if obj:IsA("Tool") then tool = obj break end
+		end
+	end
+	local result = nil
+	if tool then
+		local name = tool:GetAttribute("DisplayName") or tool.Name
+		if type(name) == "string" and name ~= "" then result = "[ " .. name .. " ]" end
+	end
+	weaponDisplayCache[character] = {text = result, at = tick()}
+	return result
+end
+
+function removeWeaponLabel(character)
+	if weaponLabels[character] then
+		pcall(function() weaponLabels[character]:Remove() end)
+		weaponLabels[character] = nil
+	end
+end
+
+function ensureWeaponLabel(character, player)
+	if not character or not character.Parent or not player or not player.Parent then
+		removeWeaponLabel(character)
+		return
+	end
+	if not espEnabled or not showWeapon or not isInSameDimension(character) then
+		removeWeaponLabel(character)
+		return
+	end
+
+	local myChar = LocalPlayer.Character
+	local myRoot = myChar and getPrimaryPart(myChar)
+	local targetRoot = getPrimaryPart(character)
+	if myRoot and targetRoot and (targetRoot.Position - myRoot.Position).Magnitude >= ESP_MAX_DISTANCE then
+		removeWeaponLabel(character)
+		return
+	end
+	if not targetRoot then
+		removeWeaponLabel(character)
+		return
+	end
+
+	local weaponText = getEquippedWeaponDisplay(character)
+	if not weaponText then
+		removeWeaponLabel(character)
+		return
+	end
+
+	local camera = workspace.CurrentCamera
+	local screenPos, onScreen = camera:WorldToViewportPoint(targetRoot.Position + Vector3.new(0, 2.2, 0))
+	if not onScreen then
+		if weaponLabels[character] then weaponLabels[character].Visible = false end
+		return
+	end
+
+	local label = weaponLabels[character]
+	if not label then
+		label = Drawing.new("Text")
+		label.Center = true
+		label.Outline = true
+		weaponLabels[character] = label
+	end
+	local cameraDistance = (targetRoot.Position - camera.CFrame.Position).Magnitude
+	label.Size = math.clamp(13 - cameraDistance / 100, 8, 13)
+	label.Color = Color3.fromRGB(255, 200, 100)
+	label.Text = weaponText
+	label.Position = Vector2.new(screenPos.X, screenPos.Y)
+	label.Visible = true
+end
+
 -- Box ESP dinÃƒÂ¢mica que se adapta ao tamanho real do personagem
 function ensureBox3D(character)
 	if not character or not character.Parent then
@@ -4772,6 +4847,76 @@ function ensureNpcNameLabel(model)
 	label.Visible = true
 end
 
+-- ========= WEAPON ESP (nome da arma na mao - NPCs) =========
+function removeNpcWeaponLabel(model)
+	if npcWeaponLabels[model] then
+		pcall(function() npcWeaponLabels[model]:Remove() end)
+		npcWeaponLabels[model] = nil
+	end
+end
+
+function ensureNpcWeaponLabel(model)
+	if not model or not model.Parent then
+		removeNpcWeaponLabel(model)
+		return
+	end
+	if not npcShowWeapon then
+		removeNpcWeaponLabel(model)
+		return
+	end
+
+	local root = getPrimaryPart(model)
+	if not root then
+		removeNpcWeaponLabel(model)
+		return
+	end
+	local myChar = LocalPlayer.Character
+	local myRoot = myChar and getPrimaryPart(myChar)
+	if myRoot and (root.Position - myRoot.Position).Magnitude >= ESP_MAX_DISTANCE then
+		removeNpcWeaponLabel(model)
+		return
+	end
+
+	local weaponText = getEquippedWeaponDisplay(model)
+	if not weaponText then
+		removeNpcWeaponLabel(model)
+		return
+	end
+
+	local camera = workspace.CurrentCamera
+	local offset
+	if npcEspPosition == "Baixo" then
+		offset = Vector3.new(0, -2.2, 0)
+	elseif npcEspPosition == "Lado" then
+		offset = Vector3.new(2.5, 0.4, 0)
+	else
+		offset = Vector3.new(0, 2.2, 0)
+	end
+	local screenPos, onScreen = camera:WorldToViewportPoint(root.Position + offset)
+	if not onScreen then
+		if npcWeaponLabels[model] then npcWeaponLabels[model].Visible = false end
+		return
+	end
+
+	local label = npcWeaponLabels[model]
+	if not label then
+		label = Drawing.new("Text")
+		label.Center = true
+		label.Outline = true
+		npcWeaponLabels[model] = label
+	end
+	local cameraDistance = (root.Position - camera.CFrame.Position).Magnitude
+	label.Size = math.clamp(13 - cameraDistance / 100, 8, 13)
+	label.Color = Color3.fromRGB(255, 200, 100)
+	label.Text = weaponText
+	if npcEspPosition == "Lado" then
+		label.Position = Vector2.new(screenPos.X + 10, screenPos.Y + 12)
+	else
+		label.Position = Vector2.new(screenPos.X, screenPos.Y)
+	end
+	label.Visible = true
+end
+
 function ensureNpcDistanceLabel(model)
 	if not model or not model.Parent then
 		if npcDistanceLabels[model] then
@@ -4969,6 +5114,9 @@ function clearAllNpcESP()
 	for m, l in pairs(npcNameLabels) do
 		if l then pcall(function() l:Remove() end) end
 	end
+	for m, l in pairs(npcWeaponLabels) do
+		if l then pcall(function() l:Remove() end) end
+	end
 	for m, l in pairs(npcDistanceLabels) do
 		if l then pcall(function() l:Remove() end) end
 	end
@@ -4989,6 +5137,7 @@ function clearAllNpcESP()
 	npcHighlights = {}
 	npcBoxes = {}
 	npcNameLabels = {}
+	npcWeaponLabels = {}
 	npcDistanceLabels = {}
 	npcHealthBars = {}
 end
@@ -5086,12 +5235,16 @@ task.spawn(function()
 			for char, label in pairs(nameLabels) do
 				if label then pcall(function() label:Remove() end) end
 			end
+			for char, label in pairs(weaponLabels) do
+				if label then pcall(function() label:Remove() end) end
+			end
 			highlights = {}
 			overlays = {}
 			boxes = {}
 			tracers = {}
 			distanceLabels = {}
 			nameLabels = {}
+			weaponLabels = {}
 		else
 		
 		-- Limpar ESPs de personagens que nÃƒÂ£o existem mais
@@ -5123,6 +5276,12 @@ task.spawn(function()
 			if not char or not char.Parent then
 				pcall(function() label:Remove() end)
 				nameLabels[char] = nil
+			end
+		end
+		for char, label in pairs(weaponLabels) do
+			if not char or not char.Parent then
+				pcall(function() label:Remove() end)
+				weaponLabels[char] = nil
 			end
 		end
 		for char, label in pairs(distanceLabels) do
@@ -5523,26 +5682,16 @@ local activeBindHints = {}
 local activeBindCapture = nil
 local toggleBindActions = {}
 local toggleBindGetters = {}
-configToggleRegistry = {}
-configBindRegistry = {}
-configStatusLabel = nil
-configTitleLabel = nil
-configSavedConfigsLabel = nil
-configNameInput = nil
-configSearchInput = nil
-configCodeBox = nil
-configListHolder = nil
-configListLayout = nil
-configIntroLabel = nil
-selectedConfigName = nil
-activeConfigName = nil
-pendingOverwriteName = nil
-pendingImportName = nil
-pendingRenameName = nil
-configSaveShortcut = nil
-configLoadShortcut = nil
-configShortcutCaptureTarget = nil
-pendingQuickConfigBindName = nil
+nmToggles = {}
+nmBinds = {}
+nmStoreFile = "night_menu_v2_profiles.json"
+nmProfiles = {}
+nmSelected = nil
+nmStatusLabel = nil
+nmNameInput = nil
+nmListScroll = nil
+nmListLayout = nil
+nmCaptureTarget = nil
 themeStatusLabel = nil
 themePresetLabel = nil
 themeStyleLabel = nil
@@ -5597,7 +5746,6 @@ suppressThemeFeedback = false
 languageButton = nil
 languageDropdown = nil
 currentUILanguage = "PT"
-MENU_CONFIG_FILE = "night_menu_config.lua"
 
 function saveInterfaceSettings()
 	if type(saveLibrarySettings) ~= "function" then
@@ -6289,26 +6437,11 @@ function refreshLocalizedMenuText()
 	if updatesHeroLabel then
 		updatesHeroLabel.Text = getLocalizedText("updates", "changelog_hero", updatesHeroLabel.Text)
 	end
-	if configTitleLabel then
-		configTitleLabel.Text = getPageText("config", "manager_title", "CONFIG MANAGER")
+	if nmStatusLabel then
+		nmStatusLabel.Text = getPageText("config", "status_prefix", nmStatusLabel.Text)
 	end
-	if configIntroLabel then
-		configIntroLabel.Text = getLocalizedText("config", "manager_intro", "Create profiles, switch between them, and manage saved settings.")
-	end
-	if configStatusLabel then
-		configStatusLabel.Text = getPageText("config", "status_no_config", configStatusLabel.Text)
-	end
-	if configNameInput then
-		configNameInput.PlaceholderText = getPageText("config", "config_name_placeholder", configNameInput.PlaceholderText)
-	end
-	if configSearchInput then
-		configSearchInput.PlaceholderText = getPageText("config", "search_placeholder", configSearchInput.PlaceholderText)
-	end
-	if configSavedConfigsLabel then
-		configSavedConfigsLabel.Text = getPageText("config", "saved_configs_title", configSavedConfigsLabel.Text)
-	end
-	if configCodeBox then
-		configCodeBox.PlaceholderText = getPageText("config", "config_code_placeholder", configCodeBox.PlaceholderText)
+	if nmNameInput then
+		nmNameInput.PlaceholderText = getPageText("config", "config_name_placeholder", nmNameInput.PlaceholderText)
 	end
 	if themePresetLabel then
 		themePresetLabel.Text = getPageText("theme", "theme_prefix", "Theme: ") .. tostring(currentThemeName)
@@ -8223,7 +8356,7 @@ configCategory = createCategory(configPage, "Config")
 configInfoCard = New("Frame", {
 	BackgroundColor3 = C.BgCard,
 	BorderSizePixel = 0,
-	Size = UDim2.new(1, 0, 0, 718),
+	Size = UDim2.new(1, 0, 0, 710),
 }, configCategory)
 Corner(12, configInfoCard)
 Stroke(C.Divider, 1, configInfoCard).Transparency = 0.2
@@ -8235,209 +8368,86 @@ New("UIPadding", {
 	PaddingRight = UDim.new(0, 18),
 }, configInfoCard)
 
-configTitleLabel = New("TextLabel", {
+New("TextLabel", {
 	BackgroundTransparency = 1,
 	Size = UDim2.new(1, 0, 0, 24),
 	Font = Enum.Font.GothamBold,
 	TextSize = 18,
 	TextColor3 = C.TxtWhite,
 	TextXAlignment = Enum.TextXAlignment.Left,
-	Text = "CONFIG MANAGER",
+	Text = "CONFIG MANAGER V2",
 }, configInfoCard)
 
-configIntroLabel = New("TextLabel", {
-	BackgroundTransparency = 1,
-	Position = UDim2.new(0, 0, 0, 30),
-	Size = UDim2.new(1, 0, 0, 32),
-	Font = Enum.Font.GothamBold,
-	TextSize = 13,
-	TextColor3 = C.TxtWhite,
-	TextWrapped = true,
-	TextXAlignment = Enum.TextXAlignment.Left,
-	TextYAlignment = Enum.TextYAlignment.Top,
-	Text = "Create profiles, switch between them, and manage saved settings.",
-}, configInfoCard)
-
-configStatusLabel = New("TextLabel", {
+nmStatusLabel = New("TextLabel", {
 	BackgroundColor3 = C.BgInput,
 	BorderSizePixel = 0,
-	Position = UDim2.new(0, 0, 0, 68),
-	Size = UDim2.new(1, 0, 0, 32),
+	Position = UDim2.new(0, 0, 0, 32),
+	Size = UDim2.new(1, 0, 0, 30),
 	Font = Enum.Font.GothamBold,
-	TextSize = 13,
+	TextSize = 12,
 	TextColor3 = C.TxtWhite,
 	TextXAlignment = Enum.TextXAlignment.Left,
-	Text = getPageText("config", "status_no_config", "Status: no config loaded"),
+	Text = "Status: ready",
 }, configInfoCard)
-Corner(8, configStatusLabel)
-Stroke(C.Divider, 1, configStatusLabel).Transparency = 0.3
-
+Corner(8, nmStatusLabel)
+Stroke(C.Divider, 1, nmStatusLabel).Transparency = 0.3
 New("UIPadding", {
 	PaddingLeft = UDim.new(0, 12),
 	PaddingRight = UDim.new(0, 12),
-}, configStatusLabel)
+}, nmStatusLabel)
 
-configNameInput = New("TextBox", {
+nmNameInput = New("TextBox", {
 	BackgroundColor3 = C.BgInput,
 	BorderSizePixel = 0,
-	Position = UDim2.new(0, 0, 0, 112),
-	Size = UDim2.new(1, 0, 0, 36),
-	Font = Enum.Font.GothamBold,
-	TextSize = 13,
-	TextColor3 = C.TxtWhite,
-	PlaceholderColor3 = C.TxtDim,
-	PlaceholderText = getPageText("config", "config_name_placeholder", "Insert config name"),
-	Text = "",
-	ClearTextOnFocus = false,
-	TextXAlignment = Enum.TextXAlignment.Left,
-}, configInfoCard)
-Corner(8, configNameInput)
-Stroke(C.Divider, 1, configNameInput).Transparency = 0.3
-New("UIPadding", {
-	PaddingLeft = UDim.new(0, 12),
-	PaddingRight = UDim.new(0, 12),
-}, configNameInput)
-
-configSearchInput = New("TextBox", {
-	BackgroundColor3 = C.BgInput,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0, 0, 0, 246),
+	Position = UDim2.new(0, 0, 0, 72),
 	Size = UDim2.new(1, 0, 0, 34),
 	Font = Enum.Font.GothamBold,
-	TextSize = 12,
+	TextSize = 13,
 	TextColor3 = C.TxtWhite,
 	PlaceholderColor3 = C.TxtDim,
-	PlaceholderText = getPageText("config", "search_placeholder", "Search Configs"),
+	PlaceholderText = "Profile name",
 	Text = "",
 	ClearTextOnFocus = false,
 	TextXAlignment = Enum.TextXAlignment.Left,
 }, configInfoCard)
-Corner(8, configSearchInput)
-Stroke(C.Divider, 1, configSearchInput).Transparency = 0.3
+Corner(8, nmNameInput)
+Stroke(C.Divider, 1, nmNameInput).Transparency = 0.3
 New("UIPadding", {
 	PaddingLeft = UDim.new(0, 12),
 	PaddingRight = UDim.new(0, 12),
-}, configSearchInput)
-configSearchInput:GetPropertyChangedSignal("Text"):Connect(function()
-	refreshConfigList()
-end)
+}, nmNameInput)
 
-configSaveShortcutBtn = New("TextButton", {
+nmListScroll = New("ScrollingFrame", {
 	BackgroundColor3 = C.BgInput,
 	BorderSizePixel = 0,
-	Position = UDim2.new(0, 0, 0, 202),
-	Size = UDim2.new(0.48, 0, 0, 34),
-	Font = Enum.Font.GothamBold,
-	TextSize = 11,
-	TextColor3 = C.TxtWhite,
-	Text = "SAVE KEY: NONE",
-	AutoButtonColor = false,
-}, configInfoCard)
-Corner(7, configSaveShortcutBtn)
-Stroke(C.Divider, 1, configSaveShortcutBtn).Transparency = 0.25
-configSaveShortcutBtn.MouseButton1Click:Connect(function() beginConfigShortcutCapture("save") end)
-
-configLoadShortcutBtn = New("TextButton", {
-	BackgroundColor3 = C.BgInput,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0.52, 0, 0, 202),
-	Size = UDim2.new(0.38, 0, 0, 34),
-	Font = Enum.Font.GothamBold,
-	TextSize = 11,
-	TextColor3 = C.TxtWhite,
-	Text = "LOAD KEY: NONE",
-	AutoButtonColor = false,
-}, configInfoCard)
-Corner(7, configLoadShortcutBtn)
-Stroke(C.Divider, 1, configLoadShortcutBtn).Transparency = 0.25
-configLoadShortcutBtn.MouseButton1Click:Connect(function() beginConfigShortcutCapture("load") end)
-
-local clearLoadShortcutBtn = New("TextButton", {
-	BackgroundColor3 = C.BgInput,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0.92, 0, 0, 202),
-	Size = UDim2.new(0.08, 0, 0, 34),
-	Font = Enum.Font.GothamBold,
-	TextSize = 12,
-	TextColor3 = C.TxtDim,
-	Text = "X",
-	AutoButtonColor = false,
-}, configInfoCard)
-Corner(7, clearLoadShortcutBtn)
-clearLoadShortcutBtn.MouseButton1Click:Connect(function()
-	setConfigLibraryShortcut("load", nil)
-end)
-
-
-configListHolder = New("Frame", {
-	BackgroundColor3 = C.BgInput,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0, 0, 0, 286),
-	Size = UDim2.new(1, 0, 0, 176),
-}, configInfoCard)
-Corner(8, configListHolder)
-Stroke(C.Divider, 1, configListHolder).Transparency = 0.3
-
-configSavedConfigsLabel = New("TextLabel", {
-	BackgroundTransparency = 1,
-	Position = UDim2.new(0, 12, 0, 8),
-	Size = UDim2.new(1, -24, 0, 18),
-	Font = Enum.Font.GothamBold,
-	TextSize = 13,
-	TextColor3 = C.TxtWhite,
-	TextXAlignment = Enum.TextXAlignment.Left,
-	Text = getPageText("config", "saved_configs_title", "Saved Configs"),
-}, configListHolder)
-
-configListScroll = New("ScrollingFrame", {
-	BackgroundTransparency = 1,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0, 8, 0, 30),
-	Size = UDim2.new(1, -16, 1, -38),
+	Position = UDim2.new(0, 0, 0, 118),
+	Size = UDim2.new(1, 0, 0, 330),
 	CanvasSize = UDim2.new(0, 0, 0, 0),
 	AutomaticCanvasSize = Enum.AutomaticSize.Y,
 	ScrollBarThickness = 4,
 	ScrollBarImageColor3 = C.Purple,
-}, configListHolder)
-
-configListLayout = Instance.new("UIListLayout")
-configListLayout.SortOrder = Enum.SortOrder.LayoutOrder
-configListLayout.Padding = UDim.new(0, 8)
-configListLayout.Parent = configListScroll
-
-configCodeBox = New("TextBox", {
-	BackgroundColor3 = C.BgInput,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0, 0, 0, 470),
-	Size = UDim2.new(1, 0, 0, 100),
-	Font = Enum.Font.Code,
-	TextSize = 12,
-	TextColor3 = C.TxtWhite,
-	PlaceholderColor3 = C.TxtDim,
-	PlaceholderText = getPageText("config", "config_code_placeholder", "Exported Lua text appears here. Paste Lua text here to import."),
-	Text = "",
-	ClearTextOnFocus = false,
-	MultiLine = true,
-	TextWrapped = false,
-	TextXAlignment = Enum.TextXAlignment.Left,
-	TextYAlignment = Enum.TextYAlignment.Top,
 }, configInfoCard)
-Corner(8, configCodeBox)
-Stroke(C.Divider, 1, configCodeBox).Transparency = 0.3
-New("UIPadding", {
-	PaddingLeft = UDim.new(0, 12),
-	PaddingRight = UDim.new(0, 12),
-	PaddingTop = UDim.new(0, 10),
-	PaddingBottom = UDim.new(0, 10),
-}, configCodeBox)
+Corner(8, nmListScroll)
+Stroke(C.Divider, 1, nmListScroll).Transparency = 0.3
 
-function createConfigActionButton(parent, buttonText, xScale, yOffset, widthScale, callback)
-	local buttonColor = buttonText == "CREATE CONFIG" and C.Purple or C.BgInput
+nmListLayout = Instance.new("UIListLayout")
+nmListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+nmListLayout.Padding = UDim.new(0, 6)
+nmListLayout.Parent = nmListScroll
+New("UIPadding", {
+	PaddingTop = UDim.new(0, 8),
+	PaddingBottom = UDim.new(0, 8),
+	PaddingLeft = UDim.new(0, 8),
+	PaddingRight = UDim.new(0, 8),
+}, nmListScroll)
+
+function nmMakeButton(parent, buttonText, xScale, yOffset, widthScale, callback)
+	local buttonColor = buttonText == "SAVE PROFILE" and C.Purple or C.BgInput
 	local button = New("TextButton", {
 		BackgroundColor3 = buttonColor,
 		BorderSizePixel = 0,
-		Position = UDim2.new(xScale, 0, 0, yOffset or 170),
-		Size = UDim2.new(widthScale or 0.48, 0, 0, 34),
+		Position = UDim2.new(xScale, 0, 0, yOffset),
+		Size = UDim2.new(widthScale or 0.32, 0, 0, 32),
 		Font = Enum.Font.GothamBold,
 		TextSize = 12,
 		TextColor3 = C.TxtWhite,
@@ -8446,12 +8456,6 @@ function createConfigActionButton(parent, buttonText, xScale, yOffset, widthScal
 	}, parent)
 	Corner(6, button)
 	Stroke(C.Divider, 1, button).Transparency = 0.25
-	button.MouseEnter:Connect(function()
-		UI_Tween(button, {BackgroundColor3 = Color3.fromRGB(35, 35, 42)}, 0.15)
-	end)
-	button.MouseLeave:Connect(function()
-		UI_Tween(button, {BackgroundColor3 = buttonColor}, 0.15)
-	end)
 	button.MouseButton1Click:Connect(callback)
 	configActionButtons[button] = slugifyText(buttonText)
 	return button
@@ -8607,7 +8611,7 @@ function createTeleportBindCard(parent, titleText, descriptionText, xScale, yOff
 		bindTag.BackgroundColor3 = C.BindActive
 	end)
 
-	registerConfigBind(bindId, {
+	nmRegisterSettingBind(bindId, {
 		getBindValue = getBindValue,
 		getBindName = getBindName,
 		setBind = setBindFn,
@@ -8633,7 +8637,7 @@ function createToggle(parent, text, callback, tooltipText, options)
 	local state = false
 	local configKey = options.configKey
 	if configKey == nil then
-		configKey = makeConfigKey(text)
+		configKey = nmMakeSettingKey(text)
 	end
 	local hasDescription = tooltipText and tooltipText ~= ""
 	local hasBindGear = options.bindId and options.getBindValue and options.getBindName and options.setBind
@@ -8903,14 +8907,14 @@ function createToggle(parent, text, callback, tooltipText, options)
 	applyToggleVisuals(false)
 	refreshBindTag()
 	if configKey then
-		configToggleRegistry[configKey] = {
+		nmToggles[configKey] = {
 			getState = function() return state end,
 			setState = setState,
 			label = text,
 		}
 	end
 	if hasBindGear then
-		registerConfigBind(options.bindId, {
+		nmRegisterSettingBind(options.bindId, {
 			getBindValue = options.getBindValue,
 			getBindName = options.getBindName,
 			setBind = options.setBind,
@@ -9716,7 +9720,7 @@ espToggle = createToggle(espVisualContent, "Esp", function(enabled)
 	if not enabled then
 		clearAllESPVisuals()
 		if radarEnabled then
-			local radarEntry = configToggleRegistry["radar"]
+			local radarEntry = nmToggles["radar"]
 			if radarEntry then radarEntry.setState(false) end
 			setRadarEnabled(false)
 		end
@@ -9760,6 +9764,16 @@ nameColorBtn.TextSize = 18
 	nameColorBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 nameColorBtn.Parent = nameFrame
 Instance.new("UICorner", nameColorBtn).CornerRadius = UDim.new(0, 10)
+
+local weaponToggle = createToggle(espVisualContent, "Weapon", function(enabled)
+	showWeapon = enabled
+	if not enabled then
+		for char, label in pairs(weaponLabels) do
+			if label then pcall(function() label:Remove() end) end
+		end
+		weaponLabels = {}
+	end
+end, "Shows the name of the weapon held by visible players.", {configKey = "show_weapon"})
 
 local boxColors = {
 	Color3.fromRGB(255, 0, 0), Color3.fromRGB(0, 255, 0), Color3.fromRGB(0, 0, 255),
@@ -10457,7 +10471,7 @@ function setRadarEnabled(enabled)
 	enabled = enabled and true or false
 	if enabled and not espEnabled then
 		radarEnabled = false
-		local radarEntry = configToggleRegistry["radar"]
+		local radarEntry = nmToggles["radar"]
 		if radarEntry then radarEntry.setState(false) end
 		pcall(function()
 			showMenuToast("Radar", "Ativa o ESP primeiro para usar o Radar.", Color3.fromRGB(255, 120, 60))
@@ -10581,6 +10595,16 @@ npcNameColorBtn.TextSize = 18
 	npcNameColorBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 npcNameColorBtn.Parent = npcNameFrame
 Instance.new("UICorner", npcNameColorBtn).CornerRadius = UDim.new(0, 10)
+
+local npcWeaponToggle = createToggle(npcEspContent, "Weapon", function(enabled)
+	npcShowWeapon = enabled
+	if not enabled then
+		for m, l in pairs(npcWeaponLabels) do
+			if l then pcall(function() l:Remove() end) end
+		end
+		npcWeaponLabels = {}
+	end
+end, "Shows the name of the weapon held by visible NPCs.", {configKey = "npc_show_weapon"})
 
 local npcNameColorIndex = 7
 npcNameColorBtn.MouseButton1Click:Connect(function()
@@ -12026,7 +12050,7 @@ function applyNpcHitbox(info)
 	local npcRoot = info and info.root
 	if not npcModel or not npcModel.Parent or not npcRoot or not npcRoot.Parent then return end
 	rememberNpcHitbox(npcModel, npcRoot)
-	npcRoot.Size = Vector3.new(hitboxSize, hitboxSize, hitboxSize)
+	npcRoot.Size = Vector3.new(npcHitboxSize, npcHitboxSize, npcHitboxSize)
 	npcRoot.Transparency = 1
 	npcRoot.CanCollide = false
 end
@@ -12087,7 +12111,7 @@ createToggle(npcAimbotContent, "NPC Hitbox", function(enabled)
 		end
 		_G.npcHitboxOriginalSizes = {}
 	end
-end, "Expands the hitbox of NPCs (uses the Hitbox Size value).", {
+end, "Expands the hitbox of NPCs with its own size setting.", {
 	configKey = "npc_hitbox",
 	bindId = "npcHitbox",
 	getBindValue = function() return npcHitboxBind end,
@@ -12097,6 +12121,43 @@ end, "Expands the hitbox of NPCs (uses the Hitbox Size value).", {
 		npcHitboxBindString = bindDisplayName(bindValue, bindName)
 	end,
 })
+
+-- Tamanho independente da hitbox dos NPCs (igual ao controlo da hitbox de players)
+npcHitboxSizeFrame = Instance.new("Frame")
+npcHitboxSizeFrame.Size = UDim2.new(1, 0, 0, 35)
+npcHitboxSizeFrame.BackgroundTransparency = 1
+npcHitboxSizeFrame.Parent = npcAimbotContent
+
+npcHitboxSizeLabel = Instance.new("TextLabel")
+npcHitboxSizeLabel.Size = UDim2.new(0.5, 0, 1, 0)
+npcHitboxSizeLabel.BackgroundTransparency = 1
+npcHitboxSizeLabel.Text = "NPC Size: " .. npcHitboxSize
+npcHitboxSizeLabel.Font = Enum.Font.GothamBold
+npcHitboxSizeLabel.TextSize = 13
+npcHitboxSizeLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+npcHitboxSizeLabel.TextXAlignment = Enum.TextXAlignment.Left
+npcHitboxSizeLabel.Parent = npcHitboxSizeFrame
+
+npcHitboxSizeInput = Instance.new("TextBox")
+npcHitboxSizeInput.Size = UDim2.new(0.5, -5, 0, 30)
+npcHitboxSizeInput.Position = UDim2.new(0.5, 5, 0, 2)
+npcHitboxSizeInput.BackgroundColor3 = C.BgInput
+npcHitboxSizeInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+npcHitboxSizeInput.PlaceholderText = "1-100"
+npcHitboxSizeInput.Text = tostring(npcHitboxSize)
+npcHitboxSizeInput.Font = Enum.Font.GothamBold
+npcHitboxSizeInput.TextSize = 14
+npcHitboxSizeInput.ClearTextOnFocus = false
+npcHitboxSizeInput.Parent = npcHitboxSizeFrame
+Instance.new("UICorner", npcHitboxSizeInput).CornerRadius = UDim.new(0, 6)
+
+npcHitboxSizeInput:GetPropertyChangedSignal("Text"):Connect(function()
+	local newSize = tonumber(npcHitboxSizeInput.Text)
+	if newSize and newSize >= 1 and newSize <= 100 then
+		npcHitboxSize = newSize
+		npcHitboxSizeLabel.Text = "NPC Size: " .. npcHitboxSize
+	end
+end)
 
 -- NOVO: Hitbox Expander (Design Limpo - sÃƒÂ³ Root, visual separado)
 hitboxSize = 10
@@ -14402,7 +14463,7 @@ function setMenuBind(bindValue, bindName)
 	menuBindListening = false
 end
 
-registerConfigBind("menu_toggle", {
+nmRegisterSettingBind("menu_toggle", {
 	getBindValue = function() return UI_TOGGLE_KEY end,
 	getBindName = function() return bindDisplayName(UI_TOGGLE_KEY, "None") end,
 	setBind = function(bindValue, bindName)
@@ -16707,986 +16768,361 @@ end)
 currentAimbotTarget = nil
 lastTargetUpdateTime = 0
 
--- Sistema de salvamento
-function setConfigStatus(message, color)
-	if not configStatusLabel then return end
-	configStatusLabel.Text = getPageText("config", "status_prefix", "Status: ") .. tostring(message)
-	configStatusLabel.TextColor3 = color or C.TxtWhite
+-- =========================================================
+-- CONFIG SYSTEM V2 - implementacao nova, independente do sistema antigo
+-- Ficheiro, formato, funcoes e chaves todos novos.
+-- =========================================================
+NM_VALUE_KEYS = {
+	"aimbotFOV", "aimbotSmooth", "aimbotTarget", "aimbotOnlyVisible", "aimbotMobile", "aimbotTeamCheck",
+	"espPosition", "espMode", "ESP_MAX_DISTANCE", "tracerMode", "espAutoEnabled",
+	"npcEspMode", "npcTracerMode", "npcEspPosition", "npcAimbotFOV", "npcAimbotSmooth", "npcAimbotTarget",
+	"speedBoostValue", "jumpPowerBoostValue", "freecamSpeed", "chatSpammerMessage", "chatSpammerInterval",
+	"autoclickerInterval", "autoclickerMode", "autoclickerButton", "autoclickerFixedX", "autoclickerFixedY",
+	"fastHitInterval", "radarRange", "stealDistanceValue", "stealTargetMode", "tpCursorCooldownSeconds",
+	"autoKillAttackSpeed", "autofireCooldown", "spinbotSpeed", "spinbotLookDown",
+	"magnetDistance", "magnetRange", "hitboxSize", "npcHitboxSize", "npcTriggerCooldown",
+}
+
+function nmSetStatus(message, color)
+	if not nmStatusLabel then return end
+	nmStatusLabel.Text = "Status: " .. tostring(message)
+	nmStatusLabel.TextColor3 = color or C.TxtWhite
 end
 
-function serializeBindValue(bindValue)
-	if typeof(bindValue) == "EnumItem" then
-		return {kind = "KeyCode", value = bindValue.Name}
-	end
-
-	if type(bindValue) == "string" and bindValue ~= "" and bindValue ~= "None" then
-		return {kind = "Mouse", value = bindValue}
-	end
-
+function nmEncodeBind(value)
+	if typeof(value) == "EnumItem" then return {k = "key", v = value.Name} end
+	if type(value) == "string" and value ~= "" and value ~= "None" then return {k = "mouse", v = value} end
 	return nil
 end
 
-function deserializeBindValue(bindData)
-	if type(bindData) ~= "table" then
-		return nil, "None"
+function nmDecodeBind(data)
+	if type(data) ~= "table" then return nil, "None" end
+	if data.k == "key" and type(data.v) == "string" then
+		local key = Enum.KeyCode[data.v]
+		if key then return key, data.v end
+	elseif data.k == "mouse" and type(data.v) == "string" then
+		return data.v, data.v
 	end
-
-	if bindData.kind == "KeyCode" and type(bindData.value) == "string" then
-		local keyCode = Enum.KeyCode[bindData.value]
-		if keyCode then
-			return keyCode, bindData.value
-		end
-	elseif bindData.kind == "Mouse" and type(bindData.value) == "string" then
-		return bindData.value, bindData.value
-	end
-
 	return nil, "None"
 end
 
-function serializeLuaValue(value, depth)
-	depth = depth or 0
-	local valueType = type(value)
-
-	if valueType == "table" then
-		local keys = {}
-		for key in pairs(value) do
-			table.insert(keys, key)
-		end
-		table.sort(keys, function(a, b)
-			return tostring(a) < tostring(b)
-		end)
-
-		local indent = string.rep("\t", depth)
-		local childIndent = string.rep("\t", depth + 1)
-		local parts = {"{"}
-		for _, key in ipairs(keys) do
-			local serializedKey
-			if type(key) == "string" and key:match("^[%a_][%w_]*$") then
-				serializedKey = key
-			else
-				serializedKey = "[" .. serializeLuaValue(key, depth + 1) .. "]"
-			end
-			table.insert(parts, childIndent .. serializedKey .. " = " .. serializeLuaValue(value[key], depth + 1) .. ",")
-		end
-		table.insert(parts, indent .. "}")
-		return table.concat(parts, "\n")
-	elseif valueType == "string" then
-		return string.format("%q", value)
-	elseif valueType == "number" or valueType == "boolean" then
-		return tostring(value)
-	end
-
-	return "nil"
-end
-
-local CONFIG_VALUE_KEYS = {
-	"aimbotFOV", "aimbotSmooth", "aimbotTarget", "aimbotOnlyVisible", "aimbotMobile", "aimbotTeamCheck", "aimbotShowFOV",
-	"espPosition", "espMode", "ESP_MAX_DISTANCE", "tracerMode", "espAutoEnabled", "espColor", "espTracerColor", "espDistanceColor", "espNameColor", "skeletonColor",
-	"npcEspMode", "npcTracerMode", "npcEspPosition", "npcEspColor", "npcEspNameColor", "npcEspTracerColor", "npcEspDistanceColor", "npcEspHealthColor",
-	"npcAimbotFOV", "npcAimbotSmooth", "npcAimbotTarget", "npcAimbotShowFOV",
-	"speedBoostValue", "jumpPowerBoostValue", "freecamSpeed", "chatSpammerMessage", "chatSpammerInterval", "noclipSoloMode",
-	"autoclickerInterval", "autoclickerMode", "autoclickerButton", "autoclickerFixedX", "autoclickerFixedY", "fastHitInterval",
-	"radarRange", "stealDistanceValue", "stealTargetMode", "tpCursorCooldownSeconds", "instantInteractWhitelistText", "instantInteractBlacklistText",
-	"autoKillAttackSpeed", "autofireCooldown", "spinbotSpeed", "magnetDistance", "magnetRange", "hitboxSize",
-}
-
-function encodeConfigValue(value)
-	local valueType = typeof(value)
-	if valueType == "Color3" then
-		return {__type = "Color3", r = value.R, g = value.G, b = value.B}
-	elseif valueType == "Vector2" then
-		return {__type = "Vector2", x = value.X, y = value.Y}
-	elseif valueType == "Vector3" then
-		return {__type = "Vector3", x = value.X, y = value.Y, z = value.Z}
-	elseif valueType == "UDim2" then
-		return {__type = "UDim2", xs = value.X.Scale, xo = value.X.Offset, ys = value.Y.Scale, yo = value.Y.Offset}
-	elseif valueType == "EnumItem" then
-		return {__type = "EnumItem", enum = tostring(value.EnumType):gsub("^Enum%.", ""), name = value.Name}
-	elseif type(value) == "number" or type(value) == "string" or type(value) == "boolean" then
-		return value
-	end
+function nmEncodeValue(value)
+	local t = typeof(value)
+	if t == "Color3" then return {t = "Color3", value.R, value.G, value.B} end
+	if t == "Vector2" then return {t = "Vector2", value.X, value.Y} end
+	if t == "Vector3" then return {t = "Vector3", value.X, value.Y, value.Z} end
+	if t == "UDim2" then return {t = "UDim2", value.X.Scale, value.X.Offset, value.Y.Scale, value.Y.Offset} end
+	if t == "EnumItem" then return {t = "Enum", tostring(value.EnumType):gsub("^Enum%.", ""), value.Name} end
+	if type(value) == "number" or type(value) == "string" or type(value) == "boolean" then return value end
 	return nil
 end
 
-function decodeConfigValue(savedValue, currentValue)
-	if type(savedValue) == "table" then
-		if savedValue.__type == "Color3" and type(savedValue.r) == "number" and type(savedValue.g) == "number" and type(savedValue.b) == "number" then
-			return Color3.new(math.clamp(savedValue.r, 0, 1), math.clamp(savedValue.g, 0, 1), math.clamp(savedValue.b, 0, 1))
-		elseif savedValue.__type == "Vector2" and type(savedValue.x) == "number" and type(savedValue.y) == "number" then
-			return Vector2.new(savedValue.x, savedValue.y)
-		elseif savedValue.__type == "Vector3" and type(savedValue.x) == "number" and type(savedValue.y) == "number" and type(savedValue.z) == "number" then
-			return Vector3.new(savedValue.x, savedValue.y, savedValue.z)
-		elseif savedValue.__type == "UDim2" and type(savedValue.xs) == "number" and type(savedValue.xo) == "number" and type(savedValue.ys) == "number" and type(savedValue.yo) == "number" then
-			return UDim2.new(savedValue.xs, savedValue.xo, savedValue.ys, savedValue.yo)
-		elseif savedValue.__type == "EnumItem" and type(savedValue.enum) == "string" and type(savedValue.name) == "string" then
-			local enumType = Enum[savedValue.enum]
-			return enumType and enumType[savedValue.name] or nil
-		end
+function nmDecodeValue(saved)
+	if type(saved) ~= "table" then
+		if type(saved) == "number" or type(saved) == "string" or type(saved) == "boolean" then return saved end
 		return nil
 	end
-	if type(savedValue) == type(currentValue) and (type(savedValue) == "number" or type(savedValue) == "string" or type(savedValue) == "boolean") then
-		return savedValue
+	if saved.t == "Color3" and type(saved[2]) == "number" and type(saved[3]) == "number" and type(saved[4]) == "number" then
+		return Color3.new(math.clamp(saved[2], 0, 1), math.clamp(saved[3], 0, 1), math.clamp(saved[4], 0, 1))
+	elseif saved.t == "Vector2" and type(saved[2]) == "number" and type(saved[3]) == "number" then
+		return Vector2.new(saved[2], saved[3])
+	elseif saved.t == "Vector3" and type(saved[2]) == "number" and type(saved[3]) == "number" and type(saved[4]) == "number" then
+		return Vector3.new(saved[2], saved[3], saved[4])
+	elseif saved.t == "UDim2" and type(saved[2]) == "number" and type(saved[3]) == "number" and type(saved[4]) == "number" and type(saved[5]) == "number" then
+		return UDim2.new(saved[2], saved[3], saved[4], saved[5])
+	elseif saved.t == "Enum" and type(saved[2]) == "string" and type(saved[3]) == "string" then
+		local enumType = Enum[saved[2]]
+		return enumType and enumType[saved[3]] or nil
 	end
 	return nil
 end
-local configRuntimeEnv = _G
-if getfenv then
-	pcall(function()
-		local scriptEnvironment = getfenv()
-		if type(scriptEnvironment) == "table" then configRuntimeEnv = scriptEnvironment end
-	end)
+
+function nmEmptyStore()
+	return {profiles = {}, ui = {}, last = nil}
 end
-function collectMenuConfig()
-	local configData = {
-		toggles = {},
-		binds = {},
-		values = {},
-		friendUserIds = {},
-	}
-	configData.friendUserIds = collectMenuFriendIds()
 
-	for key, entry in pairs(configToggleRegistry) do
-		if entry and entry.getState then
-			configData.toggles[key] = entry.getState() and true or false
-		end
+function nmReadStore()
+	if not isfile or not readfile or not isfile(nmStoreFile) then return nmEmptyStore() end
+	local ok, content = pcall(function() return readfile(nmStoreFile) end)
+	if not ok or type(content) ~= "string" then return nmEmptyStore() end
+	local ok2, data = pcall(function() return HttpService:JSONDecode(content) end)
+	if not ok2 or type(data) ~= "table" then return nmEmptyStore() end
+	if type(data.profiles) ~= "table" then data.profiles = {} end
+	if type(data.ui) ~= "table" then data.ui = {} end
+	return data
+end
+
+function nmWriteStore(store)
+	if not writefile then return false, "executor has no writefile" end
+	local ok, content = pcall(function() return HttpService:JSONEncode(store) end)
+	if not ok then return false, tostring(content) end
+	local ok2, err = pcall(function() writefile(nmStoreFile, content) end)
+	if not ok2 then return false, tostring(err) end
+	return true
+end
+
+function nmCleanName(name)
+	if type(name) ~= "string" then return nil end
+	local clean = name:gsub("^%s+", ""):gsub("%s+$", "")
+	if clean == "" then return nil end
+	return clean:sub(1, 32)
+end
+
+function nmCollectSettings()
+	local cfg = {toggles = {}, binds = {}, values = {}}
+	for key, entry in pairs(nmToggles) do
+		if entry and entry.getState then cfg.toggles[key] = entry.getState() and true or false end
 	end
-
-	for bindId, entry in pairs(configBindRegistry) do
+	for id, entry in pairs(nmBinds) do
 		if entry and entry.getBindValue then
-			local serializedBind = serializeBindValue(entry.getBindValue())
-			configData.binds[bindId] = serializedBind or {kind = "None"}
+			cfg.binds[id] = nmEncodeBind(entry.getBindValue()) or {k = "none"}
 		end
 	end
-
-	configData.values.instantInteractWhitelistText = instantInteractWhitelistText
-	configData.values.instantInteractBlacklistText = instantInteractBlacklistText
-	configData.values.stealDistanceValue = stealDistanceValue
-	configData.values.stealTargetMode = stealTargetMode
-	configData.values.tpCursorCooldownSeconds = tpCursorCooldownSeconds
-	configData.values.autoclickerInterval = autoclickerInterval
-	configData.values.autoclickerMode = autoclickerMode
-	configData.values.autoclickerButton = autoclickerButton
-	configData.values.autoclickerFixedX = autoclickerFixedX
-	configData.values.autoclickerFixedY = autoclickerFixedY
-	configData.values.fastHitInterval = fastHitInterval
-	for _, key in ipairs(CONFIG_VALUE_KEYS) do
-		local encoded = encodeConfigValue(configRuntimeEnv[key])
-		if encoded ~= nil then configData.values[key] = encoded end
+	for _, key in ipairs(NM_VALUE_KEYS) do
+		local encoded = nmEncodeValue(_G[key])
+		if encoded ~= nil then cfg.values[key] = encoded end
 	end
-	if _G.hitboxColor then configData.values.hitboxColor = encodeConfigValue(_G.hitboxColor) end
-	if FlySystem then configData.values.flySpeed = FlySystem.speed end
-
-	return configData
+	if _G.hitboxColor then cfg.values.hitboxColor = nmEncodeValue(_G.hitboxColor) end
+	if FlySystem then cfg.values.flySpeed = FlySystem.speed end
+	cfg.values.friendUserIds = collectMenuFriendIds()
+	return cfg
 end
 
-function sanitizeConfigName(configName)
-	if type(configName) ~= "string" then
-		return nil
-	end
-
-	local cleanName = configName:gsub("^%s+", ""):gsub("%s+$", "")
-	if cleanName == "" then
-		return nil
-	end
-
-	return cleanName:sub(1, 32)
-end
-
-local function decodeConfigLibraryContent(fileContent)
-	local jsonSuccess, jsonData = pcall(function()
-		return HttpService:JSONDecode(fileContent)
+function nmSyncLabels()
+	pcall(function()
+		if fovLabel then fovLabel.Text = tostring(aimbotFOV) end
+		if fovInput then fovInput.Text = tostring(aimbotFOV) end
+		if fovFill then fovFill.Size = UDim2.fromScale(math.clamp(aimbotFOV / 200, 0, 1), 1) end
+		if smoothLabel then smoothLabel.Text = tostring(aimbotSmooth) end
+		if npcFovValue then npcFovValue.Text = tostring(npcAimbotFOV) end
+		if npcSmoothValue then npcSmoothValue.Text = tostring(npcAimbotSmooth) end
+		if hitboxSliderLabel then hitboxSliderLabel.Text = "Size: " .. tostring(hitboxSize) end
+		if hitboxSliderInput then hitboxSliderInput.Text = tostring(hitboxSize) end
+		if npcHitboxSizeLabel then npcHitboxSizeLabel.Text = "NPC Size: " .. tostring(npcHitboxSize) end
+		if npcHitboxSizeInput then npcHitboxSizeInput.Text = tostring(npcHitboxSize) end
+		local pc = gui and gui:FindFirstChild("FOVCircle")
+		if pc then pc.Size = UDim2.fromOffset(aimbotFOV * 3, aimbotFOV * 3) end
+		local nc = gui and gui:FindFirstChild("NpcFOVCircle")
+		if nc then nc.Size = UDim2.fromOffset(npcAimbotFOV * 3, npcAimbotFOV * 3) end
+		if hitboxColorBtn and _G.hitboxColor then hitboxColorBtn.BackgroundColor3 = _G.hitboxColor end
+		if flySpeedInput and FlySystem then flySpeedInput.Text = tostring(FlySystem.speed) end
 	end)
-	if jsonSuccess and type(jsonData) == "table" then
-		return jsonData
-	end
-
-	local loader = loadstring or load
-	if not loader then return nil, "config is not valid JSON and loadstring is unavailable" end
-	local chunkSuccess, chunkOrErr = pcall(function() return loader(fileContent) end)
-	if not chunkSuccess or not chunkOrErr then return nil, chunkOrErr or "invalid config chunk" end
-	local runSuccess, data = pcall(chunkOrErr)
-	if not runSuccess or type(data) ~= "table" then return nil, data or "invalid config data" end
-	return data
 end
 
-function readConfigLibrary()
-	if not isfile or not readfile or not isfile(MENU_CONFIG_FILE) then
-		return {configs = {}, settings = {}}
-	end
-
-	local readSuccess, fileContent = pcall(function()
-		return readfile(MENU_CONFIG_FILE)
-	end)
-	if not readSuccess then
-		return nil, fileContent
-	end
-
-	local data, decodeErr = decodeConfigLibraryContent(fileContent)
-	if not data and isfile(MENU_CONFIG_FILE .. ".bak") then
-		local backupSuccess, backupContent = pcall(function()
-			return readfile(MENU_CONFIG_FILE .. ".bak")
-		end)
-		if backupSuccess then
-			data = decodeConfigLibraryContent(backupContent)
-			if data then warn("[NIGHT MENU] config file recovered from backup") end
-		end
-	end
-	if not data then
-		return nil, "config file is damaged; refusing to overwrite saved profiles: " .. tostring(decodeErr)
-	end
-
-	if type(data.configs) ~= "table" then
-		data.configs = {}
-	end
-	if type(data.settings) ~= "table" then
-		data.settings = {}
-	end
-	if type(data.history) ~= "table" then data.history = {} end
-
-	return data
-end
-
-function writeConfigLibrary(libraryData, removedConfigNames)
-	if not writefile then
-		return false, "executor has no writefile"
-	end
-	if type(libraryData.configs) ~= "table" then libraryData.configs = {} end
-	-- Removed unsafe re-read/merge that could drop existing configs.
-	-- libraryData passed by callers already contains the full config set;
-	-- removedConfigNames marks intentionally deleted entries.
-
-	local encodeSuccess, serialized = pcall(function()
-		return HttpService:JSONEncode(libraryData)
-	end)
-	if not encodeSuccess then
-		return false, serialized
-	end
-	if isfile and readfile and isfile(MENU_CONFIG_FILE) then
-		pcall(function()
-			local currentContent = readfile(MENU_CONFIG_FILE)
-			if decodeConfigLibraryContent(currentContent) then
-				writefile(MENU_CONFIG_FILE .. ".bak", currentContent)
+function nmApplySettings(cfg)
+	if type(cfg) ~= "table" then return end
+	if type(cfg.toggles) == "table" then
+		for key, state in pairs(cfg.toggles) do
+			local entry = nmToggles[key]
+			if entry and entry.setState and type(state) == "boolean" then
+				pcall(function() entry.setState(state, "force") end)
 			end
-		end)
-	end
-	local success, err = pcall(function()
-		writefile(MENU_CONFIG_FILE, serialized)
-	end)
-	if not success then
-		return false, err
-	end
-
-	return true
-end
-
-function getSortedConfigNames(libraryData)
-	local names = {}
-	if type(libraryData) ~= "table" or type(libraryData.configs) ~= "table" then
-		return names
-	end
-
-	for configName in pairs(libraryData.configs) do
-		table.insert(names, configName)
-	end
-
-	table.sort(names, function(a, b)
-		local configA = libraryData.configs[a]
-		local configB = libraryData.configs[b]
-		local favoriteA = type(configA) == "table" and configA.favorite == true
-		local favoriteB = type(configB) == "table" and configB.favorite == true
-		if favoriteA ~= favoriteB then return favoriteA end
-		return tostring(a):lower() < tostring(b):lower()
-	end)
-
-	return names
-end
-
-function getConfigTimestampText(value)
-	if type(value) ~= "string" or value == "" then
-		return "--"
-	end
-	return value
-end
-
-function makeConfigTimestamp()
-	local ok, formatted = pcall(function()
-		return os.date("%Y-%m-%d %H:%M:%S")
-	end)
-	return ok and formatted or "unknown"
-end
-
-function updateConfigShortcutButtons()
-	if configSaveShortcutBtn then
-		configSaveShortcutBtn.Text = "SAVE KEY: " .. string.upper(configSaveShortcut or "NONE")
-	end
-	if configLoadShortcutBtn then
-		configLoadShortcutBtn.Text = "LOAD KEY: " .. string.upper(configLoadShortcut or "NONE")
-	end
-end
-
-function beginConfigShortcutCapture(target)
-	configShortcutCaptureTarget = target
-	pendingQuickConfigBindName = nil
-	setConfigStatus("press a key for " .. string.upper(target) .. " shortcut | Backspace clears | Esc cancels", Color3.fromRGB(170, 220, 255))
-end
-
-function setConfigLibraryShortcut(target, keyName)
-	if target == "save" then
-		configSaveShortcut = keyName
-	elseif target == "load" then
-		configLoadShortcut = keyName
-	else
-		return false
-	end
-	local success, err = saveLibrarySettings()
-	updateConfigShortcutButtons()
-	if not success then
-		setConfigStatus("shortcut save failed: " .. tostring(err), Color3.fromRGB(255, 120, 120))
-		return false
-	end
-	local libraryData = readConfigLibrary()
-	if type(libraryData) == "table" then
-		appendConfigHistory(libraryData, "Library", target .. " shortcut changed", keyName or "cleared")
-		writeConfigLibrary(libraryData)
-	end
-	setConfigStatus(string.upper(target) .. " shortcut: " .. (keyName or "none"), Color3.fromRGB(170, 255, 170))
-	return true
-end
-
-function saveQuickConfigBind(configName, keyName)
-	local libraryData, err = readConfigLibrary()
-	local configData = type(libraryData) == "table" and libraryData.configs and libraryData.configs[configName]
-	if type(configData) ~= "table" then
-		setConfigStatus(err or "config not found", Color3.fromRGB(255, 120, 120))
-		return false
-	end
-	configData.quickBind = keyName
-	appendConfigHistory(libraryData, configName, "profile bind changed", keyName or "cleared")
-	local success, saveErr = writeConfigLibrary(libraryData)
-	if not success then
-		setConfigStatus("bind save failed: " .. tostring(saveErr), Color3.fromRGB(255, 120, 120))
-		return false
-	end
-	refreshConfigList()
-	setConfigStatus("profile bind: " .. configName .. " -> " .. (keyName or "none"), Color3.fromRGB(170, 255, 170))
-	return true
-end
-
-function handleConfigQuickInput(input, processed)
-	local keyboardInput = input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode ~= Enum.KeyCode.Unknown
-	if configShortcutCaptureTarget or pendingQuickConfigBindName then
-		if not keyboardInput then return true end
-		local targetName = pendingQuickConfigBindName
-		local shortcutTarget = configShortcutCaptureTarget
-		if input.KeyCode == Enum.KeyCode.Escape then
-			pendingQuickConfigBindName = nil
-			configShortcutCaptureTarget = nil
-			setConfigStatus("bind capture cancelled", C.TxtWhite)
-		elseif input.KeyCode == Enum.KeyCode.Backspace then
-			pendingQuickConfigBindName = nil
-			configShortcutCaptureTarget = nil
-			if targetName then saveQuickConfigBind(targetName, nil) else setConfigLibraryShortcut(shortcutTarget, nil) end
-		else
-			local keyName = input.KeyCode.Name
-			pendingQuickConfigBindName = nil
-			configShortcutCaptureTarget = nil
-			if targetName then saveQuickConfigBind(targetName, keyName) else setConfigLibraryShortcut(shortcutTarget, keyName) end
 		end
-		return true
 	end
-
-	if processed or activeBindCapture or UserInputService:GetFocusedTextBox() or not keyboardInput then
-		return false
+	if type(cfg.binds) == "table" then
+		for id, data in pairs(cfg.binds) do
+			local entry = nmBinds[id]
+			if entry and entry.setBind then
+				local value, name = nmDecodeBind(data)
+				pcall(function()
+					entry.setBind(value, name)
+					if entry.refreshBindTag then entry.refreshBindTag() end
+				end)
+			end
+		end
 	end
-	local keyName = input.KeyCode.Name
-	if configSaveShortcut and keyName == configSaveShortcut then
-		saveConfig()
-		return true
-	elseif configLoadShortcut and keyName == configLoadShortcut then
-		loadConfig()
-		return true
-	end
-
-	local libraryData = readConfigLibrary()
-	if type(libraryData) == "table" and type(libraryData.configs) == "table" then
-		for name, data in pairs(libraryData.configs) do
-			if type(data) == "table" and data.quickBind == keyName then
-				if activeConfigName and activeConfigName ~= name then
-					local savedCurrent = saveConfig(activeConfigName, true)
-					if not savedCurrent then return true end
+	if type(cfg.values) == "table" then
+		for key, saved in pairs(cfg.values) do
+			if key ~= "friendUserIds" then
+				local decoded = nmDecodeValue(saved)
+				if decoded ~= nil then _G[key] = decoded end
+			end
+		end
+		if type(cfg.values.flySpeed) == "number" and FlySystem then
+			pcall(function() FlySystem:setSpeed(cfg.values.flySpeed) end)
+		end
+		if cfg.values.hitboxColor then
+			local color = nmDecodeValue(cfg.values.hitboxColor)
+			if color then _G.hitboxColor = color end
+		end
+		if type(cfg.values.friendUserIds) == "table" then
+			playerFriendIds = {}
+			for _, userId in ipairs(cfg.values.friendUserIds) do playerFriendIds[tostring(userId)] = true end
+			pcall(function()
+				for _, plr in ipairs(Players:GetPlayers()) do
+					updatePlayerFriendVisual(plr)
+					if plr.Character and refreshESPForPlayer then pcall(refreshESPForPlayer, plr) end
 				end
-				loadConfig(name)
-				return true
-			end
+			end)
 		end
 	end
-	return false
+	pcall(function() if refreshKeybindManager then refreshKeybindManager() end end)
+	nmSyncLabels()
 end
 
-UserInputService.InputBegan:Connect(function(input, processed)
-	handleConfigQuickInput(input, processed)
-end)
-
-function appendConfigHistory(libraryData, configName, action, details)
-	if type(libraryData) ~= "table" then return end
-	if type(libraryData.history) ~= "table" then libraryData.history = {} end
-	table.insert(libraryData.history, {
-		name = tostring(configName or ""),
-		action = tostring(action or "changed"),
-		details = tostring(details or ""),
-		at = makeConfigTimestamp(),
-	})
-	while #libraryData.history > 250 do table.remove(libraryData.history, 1) end
-end
-
-function showConfigHistory(configName)
-	local libraryData, err = readConfigLibrary()
-	if type(libraryData) ~= "table" then
-		setConfigStatus(err or "unable to read config history", Color3.fromRGB(255, 120, 120))
+function nmSaveProfile(name)
+	local clean = nmCleanName(name or (nmNameInput and nmNameInput.Text))
+	if not clean then
+		nmSetStatus("type a profile name first", Color3.fromRGB(255, 120, 120))
 		return false
 	end
-	local targetName = configName or selectedConfigName
-	local lines = {"CONFIG CHANGE HISTORY"}
-	local shown = 0
-	for index = #(libraryData.history or {}), 1, -1 do
-		local event = libraryData.history[index]
-		if type(event) == "table" and (not targetName or event.name == targetName) then
-			local line = "[" .. tostring(event.at or "--") .. "] " .. tostring(event.action or "changed")
-			if event.name and event.name ~= "" then line = line .. " | " .. tostring(event.name) end
-			if event.details and event.details ~= "" then line = line .. " | " .. tostring(event.details) end
-			table.insert(lines, line)
-			shown = shown + 1
-			if shown >= 40 then break end
-		end
+	local store = nmReadStore()
+	store.profiles[clean] = nmCollectSettings()
+	store.last = clean
+	local ok, err = nmWriteStore(store)
+	if not ok then
+		nmSetStatus("save failed: " .. tostring(err), Color3.fromRGB(255, 120, 120))
+		return false
 	end
-	if shown == 0 then table.insert(lines, "No changes recorded for this config.") end
-	updateConfigCodeBox(table.concat(lines, "\n"))
-	setConfigStatus("history shown: " .. (targetName or "all configs"), Color3.fromRGB(170, 220, 255))
+	nmSelected = clean
+	nmRefreshProfiles()
+	nmSetStatus("saved: " .. clean, Color3.fromRGB(170, 255, 170))
+	showMenuToast("Profile Saved", clean, Color3.fromRGB(170, 255, 170))
 	return true
 end
 
-function toggleConfigFavorite(configName)
-	local libraryData, err = readConfigLibrary()
-	local configData = type(libraryData) == "table" and libraryData.configs and libraryData.configs[configName]
-	if type(configData) ~= "table" then
-		setConfigStatus(err or "config not found", Color3.fromRGB(255, 120, 120))
+function nmLoadProfile(name)
+	local clean = nmCleanName(name or (nmNameInput and nmNameInput.Text) or nmSelected)
+	if not clean then
+		nmSetStatus("select or type a profile name", Color3.fromRGB(255, 120, 120))
 		return false
 	end
-	configData.favorite = not (configData.favorite == true)
-	appendConfigHistory(libraryData, configName, configData.favorite and "favorited" or "unfavorited")
-	local success, saveErr = writeConfigLibrary(libraryData)
-	if not success then
-		setConfigStatus("favorite update failed: " .. tostring(saveErr), Color3.fromRGB(255, 120, 120))
+	local store = nmReadStore()
+	local cfg = store.profiles[clean]
+	if type(cfg) ~= "table" then
+		nmSetStatus("profile not found: " .. clean, Color3.fromRGB(255, 120, 120))
 		return false
 	end
-	refreshConfigList()
+	nmApplySettings(cfg)
+	store.last = clean
+	nmWriteStore(store)
+	nmSelected = clean
+	if nmNameInput then nmNameInput.Text = clean end
+	nmRefreshProfiles()
+	nmSetStatus("loaded: " .. clean, Color3.fromRGB(170, 255, 170))
+	showMenuToast("Profile Loaded", clean, Color3.fromRGB(170, 220, 255))
 	return true
 end
-function selectConfigName(configName)
-	selectedConfigName = configName
-	pendingOverwriteName = nil
-	pendingImportName = nil
-	pendingRenameName = nil
-	if configNameInput then
-		configNameInput.Text = configName or ""
+
+function nmDeleteProfile(name)
+	local clean = nmCleanName(name or (nmNameInput and nmNameInput.Text) or nmSelected)
+	if not clean then
+		nmSetStatus("select or type a profile name", Color3.fromRGB(255, 120, 120))
+		return false
 	end
+	local store = nmReadStore()
+	if type(store.profiles[clean]) ~= "table" then
+		nmSetStatus("profile not found: " .. clean, Color3.fromRGB(255, 120, 120))
+		return false
+	end
+	store.profiles[clean] = nil
+	if store.last == clean then store.last = nil end
+	local ok, err = nmWriteStore(store)
+	if not ok then
+		nmSetStatus("delete failed: " .. tostring(err), Color3.fromRGB(255, 120, 120))
+		return false
+	end
+	if nmSelected == clean then nmSelected = nil end
+	nmRefreshProfiles()
+	nmSetStatus("deleted: " .. clean, Color3.fromRGB(170, 255, 170))
+	return true
 end
 
-function updateConfigCodeBox(textValue)
-	if configCodeBox then
-		configCodeBox.Text = textValue or ""
+function nmRefreshProfiles()
+	if not nmListScroll then return end
+	for _, child in ipairs(nmListScroll:GetChildren()) do
+		if not child:IsA("UIListLayout") and not child:IsA("UIPadding") then
+			child:Destroy()
+		end
+	end
+	local store = nmReadStore()
+	local names = {}
+	for name in pairs(store.profiles) do table.insert(names, name) end
+	table.sort(names, function(a, b) return tostring(a):lower() < tostring(b):lower() end)
+	if #names == 0 then
+		New("TextLabel", {
+			BackgroundTransparency = 1,
+			Size = UDim2.new(1, -8, 0, 26),
+			Font = Enum.Font.GothamBold,
+			TextSize = 12,
+			TextColor3 = C.TxtMid,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			Text = "No saved profiles yet.",
+		}, nmListScroll)
+		return
+	end
+	for _, name in ipairs(names) do
+		local row = New("Frame", {
+			BackgroundColor3 = nmSelected == name and C.BindActive or C.BgCard,
+			BorderSizePixel = 0,
+			Size = UDim2.new(1, -8, 0, 38),
+		}, nmListScroll)
+		Corner(7, row)
+		Stroke(C.Divider, 1, row).Transparency = 0.25
+
+		local nameBtn = New("TextButton", {
+			BackgroundTransparency = 1,
+			Position = UDim2.new(0, 8, 0, 4),
+			Size = UDim2.new(1, -104, 0, 30),
+			Font = Enum.Font.GothamBold,
+			TextSize = 12,
+			TextColor3 = C.TxtWhite,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			Text = name,
+			AutoButtonColor = false,
+		}, row)
+		nameBtn.MouseButton1Click:Connect(function()
+			nmSelected = name
+			if nmNameInput then nmNameInput.Text = name end
+			nmRefreshProfiles()
+		end)
+
+		local loadBtn = New("TextButton", {
+			BackgroundColor3 = C.BindBg,
+			BorderSizePixel = 0,
+			Position = UDim2.new(1, -92, 0.5, -12),
+			Size = UDim2.new(0, 42, 0, 24),
+			Font = Enum.Font.GothamBold,
+			TextSize = 10,
+			TextColor3 = C.TxtWhite,
+			Text = "LOAD",
+			AutoButtonColor = false,
+		}, row)
+		Corner(5, loadBtn)
+		loadBtn.MouseButton1Click:Connect(function() nmLoadProfile(name) end)
+
+		local delBtn = New("TextButton", {
+			BackgroundColor3 = C.BindBg,
+			BorderSizePixel = 0,
+			Position = UDim2.new(1, -44, 0.5, -12),
+			Size = UDim2.new(0, 38, 0, 24),
+			Font = Enum.Font.GothamBold,
+			TextSize = 10,
+			TextColor3 = Color3.fromRGB(255, 150, 150),
+			Text = "DEL",
+			AutoButtonColor = false,
+		}, row)
+		Corner(5, delBtn)
+		delBtn.MouseButton1Click:Connect(function() nmDeleteProfile(name) end)
 	end
 end
 
 function saveLibrarySettings()
-	local libraryData, err = readConfigLibrary()
-	if type(libraryData) ~= "table" then
-		return false, err
-	end
-
-	if type(libraryData.configs) ~= "table" then
-		libraryData.configs = {}
-	end
-	if type(libraryData.settings) ~= "table" then
-		libraryData.settings = {}
-	end
-
-	libraryData.settings.themeName = currentThemeName
-	libraryData.settings.themeStyle = currentThemeStyle
-	libraryData.settings.sizeIndex = currentSizeIndex
-	libraryData.settings.hasCustomSizePreference = hasCustomSizePreference and true or false
-	libraryData.settings.autoExecuteEnabled = autoExecuteEnabled
-	libraryData.settings.language = currentUILanguage
-	libraryData.settings.activeTab = currentTab
-	libraryData.settings.activeMiscTab = activeMiscSubPageName
-	libraryData.settings.mainFramePosition = packInterfacePosition(mainFrame and mainFrame.Position or menuExpandedPosition)
-	libraryData.settings.restoreButtonPosition = packInterfacePosition(restoreButtonDefaultPosition)
-	libraryData.settings.configSaveShortcut = configSaveShortcut
-	libraryData.settings.configLoadShortcut = configLoadShortcut
-	libraryData.settings.friendUserIds = collectMenuFriendIds()
-
-	return writeConfigLibrary(libraryData)
-end
-
-function refreshConfigList()
-	if not configListScroll then return end
-	configListScroll.CanvasPosition = Vector2.new(0, 0)
-
-	for _, child in ipairs(configListScroll:GetChildren()) do
-		if not child:IsA("UIListLayout") then
-			child:Destroy()
-		end
-	end
-
-	local libraryData, err = readConfigLibrary()
-	if type(libraryData) ~= "table" then
-		setConfigStatus(err or "unable to read config list", Color3.fromRGB(255, 120, 120))
-		return
-	end
-
-	local names = getSortedConfigNames(libraryData)
-	local searchText = string.lower((configSearchInput and configSearchInput.Text) or "")
-	if #names == 0 then
-		local emptyLabel = New("TextLabel", {
-			BackgroundTransparency = 1,
-			Size = UDim2.new(1, -8, 0, 26),
-			Font = Enum.Font.GothamBold,
-			TextSize = 12,
-			TextColor3 = C.TxtWhite,
-			TextXAlignment = Enum.TextXAlignment.Left,
-			Text = getPageText("config", "no_saved_configs", "No saved configs yet."),
-		}, configListScroll)
-		return
-	end
-
-	local shownCount = 0
-	for _, configName in ipairs(names) do
-		local configData = libraryData.configs and libraryData.configs[configName]
-		if searchText == "" or string.find(string.lower(configName), searchText, 1, true) then
-			shownCount = shownCount + 1
-			local row = New("Frame", {
-				BackgroundColor3 = selectedConfigName == configName and C.BindActive or C.BgCard,
-				BorderSizePixel = 0,
-				Size = UDim2.new(1, -8, 0, 64),
-			}, configListScroll)
-			row:SetAttribute("ConfigName", configName)
-			Corner(8, row)
-			Stroke(C.Divider, 1, row).Transparency = 0.25
-
-			local rowName = New("TextButton", {
-				BackgroundTransparency = 1,
-				Position = UDim2.new(0, 10, 0, 4),
-				Size = UDim2.new(1, -142, 0, 20),
-				Font = Enum.Font.GothamBold,
-				TextSize = 12,
-				TextColor3 = C.TxtWhite,
-				TextXAlignment = Enum.TextXAlignment.Left,
-				Text = configName,
-				AutoButtonColor = false,
-			}, row)
-
-			New("TextLabel", {
-				BackgroundTransparency = 1,
-				Position = UDim2.new(0, 10, 0, 25),
-				Size = UDim2.new(1, -142, 0, 30),
-				Font = Enum.Font.GothamBold,
-				TextSize = 10,
-				TextColor3 = C.TxtWhite,
-				TextXAlignment = Enum.TextXAlignment.Left,
-				Text = "Created: " .. getConfigTimestampText(configData and configData.createdAt) .. " | Last Use: " .. getConfigTimestampText(configData and configData.lastUsed),
-			}, row)
-
-			local loadBtn = New("TextButton", {
-				BackgroundColor3 = C.BindBg,
-				BorderSizePixel = 0,
-				Position = UDim2.new(1, -42, 0.5, -11),
-				Size = UDim2.new(0, 36, 0, 22),
-				Font = Enum.Font.GothamBold,
-				TextSize = 11,
-				TextColor3 = C.TxtWhite,
-				Text = "LOAD",
-				AutoButtonColor = false,
-			}, row)
-			Corner(6, loadBtn)
-
-			local bindBtn = New("TextButton", {
-				BackgroundColor3 = C.BgInput,
-				BorderSizePixel = 0,
-				Position = UDim2.new(1, -104, 0.5, -11),
-				Size = UDim2.new(0, 56, 0, 22),
-				Font = Enum.Font.GothamBold,
-				TextSize = 9,
-				TextColor3 = C.TxtWhite,
-				Text = configData.quickBind and string.upper(configData.quickBind) or "BIND",
-				AutoButtonColor = false,
-			}, row)
-			Corner(6, bindBtn)
-			bindBtn.MouseButton1Click:Connect(function()
-				selectConfigName(configName)
-				pendingQuickConfigBindName = configName
-				configShortcutCaptureTarget = nil
-				setConfigStatus("press a key for " .. configName .. " | Backspace clears | Esc cancels", Color3.fromRGB(170, 220, 255))
-			end)
-
-			local favoriteBtn = New("TextButton", {
-				BackgroundColor3 = C.BgInput,
-				BorderSizePixel = 0,
-				Position = UDim2.new(1, -134, 0.5, -11),
-				Size = UDim2.new(0, 24, 0, 22),
-				Font = Enum.Font.GothamBold,
-				TextSize = 14,
-				TextColor3 = configData.favorite and C.Accent or C.TxtDim,
-				Text = configData.favorite and "*" or "+",
-				AutoButtonColor = false,
-			}, row)
-			Corner(6, favoriteBtn)
-			favoriteBtn.MouseButton1Click:Connect(function()
-				toggleConfigFavorite(configName)
-			end)
-
-			rowName.MouseButton1Click:Connect(function()
-				selectConfigName(configName)
-				for _, existingRow in ipairs(configListScroll:GetChildren()) do
-					if existingRow:IsA("Frame") and existingRow:GetAttribute("ConfigName") then
-						existingRow.BackgroundColor3 = existingRow:GetAttribute("ConfigName") == configName and C.BindActive or C.BgCard
-					end
-				end
-				setConfigStatus("selected: " .. configName, Color3.fromRGB(170, 220, 255))
-			end)
-
-			loadBtn.MouseButton1Click:Connect(function()
-				loadConfig(configName)
-			end)
-		end
-	end
-
-	if shownCount == 0 then
-		local emptySearchLabel = New("TextLabel", {
-			BackgroundTransparency = 1,
-			Size = UDim2.new(1, -8, 0, 26),
-			Font = Enum.Font.GothamBold,
-			TextSize = 12,
-			TextColor3 = C.TxtWhite,
-			TextXAlignment = Enum.TextXAlignment.Left,
-			Text = "No configs match your search.",
-		}, configListScroll)
-	end
-end
-
-function saveConfig(configName, updateExisting)
-	if not writefile then
-		setConfigStatus("executor has no writefile", Color3.fromRGB(255, 120, 120))
-		return false
-	end
-
-	local cleanName = sanitizeConfigName(configName or (configNameInput and configNameInput.Text))
-	if not cleanName then
-		setConfigStatus("insert a config name first", Color3.fromRGB(255, 120, 120))
-		return false
-	end
-
-	local libraryData, err = readConfigLibrary()
-	if type(libraryData) ~= "table" then
-		setConfigStatus(err or "unable to open config list", Color3.fromRGB(255, 120, 120))
-		return false
-	end
-	if updateExisting and not libraryData.configs[cleanName] then
-		setConfigStatus("selected config no longer exists", Color3.fromRGB(255, 120, 120))
-		return false
-	end
-
-	if libraryData.configs[cleanName] and not updateExisting then
-		setConfigStatus("config already exists; use a different name or click Update to overwrite", Color3.fromRGB(255, 120, 120))
-		showMenuToast("Config Already Exists", cleanName .. " | choose another name or use Update", Color3.fromRGB(255, 120, 120))
-		return false
-	end
-
-	pendingOverwriteName = nil
-	local existingConfig = libraryData.configs[cleanName]
-	local configPayload = collectMenuConfig()
-	configPayload.createdAt = existingConfig and existingConfig.createdAt or makeConfigTimestamp()
-	configPayload.lastUsed = existingConfig and existingConfig.lastUsed or "--"
-	configPayload.favorite = existingConfig and existingConfig.favorite == true or false
-	configPayload.quickBind = existingConfig and existingConfig.quickBind or nil
-	libraryData.configs[cleanName] = configPayload
-	libraryData.lastSelected = cleanName
-	appendConfigHistory(libraryData, cleanName, existingConfig and "updated" or "created")
-
-	local success, saveErr = writeConfigLibrary(libraryData)
-	if not success then
-		setConfigStatus("save failed: " .. tostring(saveErr), Color3.fromRGB(255, 120, 120))
-		return false
-	end
-
-	selectConfigName(cleanName)
-	activeConfigName = cleanName
-	refreshConfigList()
-	setConfigStatus("config saved: " .. cleanName, Color3.fromRGB(170, 255, 170))
-	showMenuToast("Config Saved", cleanName, Color3.fromRGB(170, 255, 170))
-	return true
-end
-
-function loadConfig(configName)
-	local cleanName = sanitizeConfigName(configName or (configNameInput and configNameInput.Text) or selectedConfigName)
-	if not cleanName then
-		setConfigStatus("select or type a config name", Color3.fromRGB(255, 120, 120))
-		return false
-	end
-
-	local libraryData, err = readConfigLibrary()
-	if type(libraryData) ~= "table" then
-		setConfigStatus(err or "unable to read config list", Color3.fromRGB(255, 120, 120))
-		return false
-	end
-
-	local configData = libraryData.configs and libraryData.configs[cleanName]
-	if type(configData) ~= "table" then
-		setConfigStatus("config not found: " .. cleanName, Color3.fromRGB(255, 120, 120))
-		return false
-	end
-
-	if type(configData.friendUserIds) == "table" then
-		playerFriendIds = {}
-		for _, userId in ipairs(configData.friendUserIds) do
-			playerFriendIds[tostring(userId)] = true
-		end
-		if currentAimbotTarget and isMenuFriend(currentAimbotTarget) then currentAimbotTarget = nil end
-		if magnetTarget and isMenuFriend(magnetTarget) and stopMagnet then stopMagnet() end
-		if infinitePushTarget and isMenuFriend(infinitePushTarget) and stopInfinitePush then stopInfinitePush() end
-		if killTargetPlayer and isMenuFriend(killTargetPlayer) and stopKilling then stopKilling() end
-		for _, player in ipairs(Players:GetPlayers()) do
-			updatePlayerFriendVisual(player)
-			if player.Character and refreshESPForPlayer then
-				pcall(function() refreshESPForPlayer(player) end)
-			end
-		end
-		if selectedPlayer then updatePlayerFriendVisual(selectedPlayer) end
-		if saveLibrarySettings then task.defer(saveLibrarySettings) end
-	end
-
-	if type(configData.binds) == "table" then
-		for bindId, bindData in pairs(configData.binds) do
-			local entry = configBindRegistry[bindId]
-			if entry and entry.setBind then
-				local bindValue, bindName = deserializeBindValue(bindData)
-				entry.setBind(bindValue, bindName)
-				if entry.refreshBindTag then
-					entry.refreshBindTag()
-				end
-			end
-		end
-		if refreshKeybindManager then task.defer(refreshKeybindManager) end
-	end
-
-	if type(configData.toggles) == "table" then
-		for key, savedState in pairs(configData.toggles) do
-			local canonicalKey = CONFIG_TOGGLE_KEY_ALIASES[key] or key
-			local entry = configToggleRegistry[canonicalKey]
-			if entry and entry.setState and type(savedState) == "boolean" then
-				entry.setState(savedState, "force")
-			end
-		end
-	end
-
-	if type(configData.values) == "table" then
-		if type(configData.values.instantInteractWhitelistText) == "string" then
-			instantInteractWhitelistText = configData.values.instantInteractWhitelistText
-			if instantInteractWhitelistInput then
-				instantInteractWhitelistInput.Text = instantInteractWhitelistText
-			end
-		end
-		if type(configData.values.instantInteractBlacklistText) == "string" then
-			instantInteractBlacklistText = configData.values.instantInteractBlacklistText
-			if instantInteractBlacklistInput then
-				instantInteractBlacklistInput.Text = instantInteractBlacklistText
-			end
-			instantInteractBlockShopsEnabled = instantInteractBlacklistText == instantInteractDefaultShopBlacklist
-			if syncInstantInteractBlockShopsButton then
-				syncInstantInteractBlockShopsButton()
-			end
-		end
-		if type(configData.values.stealDistanceValue) == "number" then
-			setStealDistanceValue(configData.values.stealDistanceValue)
-			if stealDistanceInput then
-				stealDistanceInput.Text = tostring(stealDistanceValue)
-			end
-			if stealDistanceLabel then
-				stealDistanceLabel.Text = "Steal Distance: " .. tostring(stealDistanceValue)
-			end
-		end
-		if type(configData.values.stealTargetMode) == "string" then
-			local mode = string.lower(configData.values.stealTargetMode)
-			if mode == "best" or mode == "worst" then
-				stealTargetMode = (mode == "worst") and "Worst" or "Best"
-				if stealTargetModeBtn then
-					stealTargetModeBtn.Text = "Steal Target Mode: " .. tostring(stealTargetMode)
-				end
-			end
-		end
-		if type(configData.values.tpCursorCooldownSeconds) == "number" then
-			tpCursorCooldownSeconds = math.clamp(configData.values.tpCursorCooldownSeconds, 0.5, 30)
-			if tpCursorCooldownInput then
-				tpCursorCooldownInput.Text = tostring(tpCursorCooldownSeconds)
-			end
-		end
-		if type(configData.values.autoclickerInterval) == "number" then
-			autoclickerInterval = configData.values.autoclickerInterval
-			if autoclickerIntervalInput then
-				autoclickerIntervalInput.Text = tostring(autoclickerInterval)
-			end
-		end
-		if type(configData.values.autoclickerMode) == "string" then
-			autoclickerMode = configData.values.autoclickerMode
-			if autoclickerModeBtn then
-				autoclickerModeBtn.Text = "Click Mode: " .. autoclickerMode
-			end
-			if autoclickerFixedFrame then
-				autoclickerFixedFrame.Visible = (autoclickerMode == "Fixed Location")
-			end
-		end
-		if type(configData.values.autoclickerButton) == "string" then
-			autoclickerButton = configData.values.autoclickerButton
-			if autoclickerButtonBtn then
-				autoclickerButtonBtn.Text = "Click Button: " .. autoclickerButton
-			end
-		end
-		if type(configData.values.autoclickerFixedX) == "number" then
-			autoclickerFixedX = configData.values.autoclickerFixedX
-			if autoclickerFixedXInput then
-				autoclickerFixedXInput.Text = tostring(autoclickerFixedX)
-			end
-		end
-		if type(configData.values.autoclickerFixedY) == "number" then
-			autoclickerFixedY = configData.values.autoclickerFixedY
-			if autoclickerFixedYInput then
-				autoclickerFixedYInput.Text = tostring(autoclickerFixedY)
-			end
-		end
-		if type(configData.values.fastHitInterval) == "number" then
-			fastHitInterval = configData.values.fastHitInterval
-			if fastHitIntervalInput then
-				fastHitIntervalInput.Text = tostring(fastHitInterval)
-			end
-		end
-	end
-
-		for _, key in ipairs(CONFIG_VALUE_KEYS) do
-		local savedValue = configData.values and configData.values[key]
-		if savedValue ~= nil then
-			local decoded = decodeConfigValue(savedValue, configRuntimeEnv[key])
-			if decoded ~= nil then configRuntimeEnv[key] = decoded end
-		end
-	end
-	if configData.values and type(configData.values.flySpeed) == "number" and FlySystem then FlySystem:setSpeed(configData.values.flySpeed) end
-	if configData.values and configData.values.hitboxColor then
-		local color = decodeConfigValue(configData.values.hitboxColor, _G.hitboxColor)
-		if color then _G.hitboxColor = color end
-	end
-
-	if espDistLabel then espDistLabel.Text = tostring(ESP_MAX_DISTANCE) end
-	if espDistFill then espDistFill.Size = UDim2.fromScale(ESP_MAX_DISTANCE / 500, 1) end
-	if modeBtn then modeBtn.Text = "Modo: " .. tostring(espMode) end
-	if positionBtn then positionBtn.Text = "Position: " .. tostring(espPosition) end
-	if npcPositionBtn then npcPositionBtn.Text = "Position: " .. tostring(npcEspPosition) end
-	if tracerModeBtn then tracerModeBtn.Text = "Modo Tracer: " .. tostring(tracerMode) end
-	if boxColorBtn then boxColorBtn.BackgroundColor3 = espColor end
-	if tracerColorBtn then tracerColorBtn.BackgroundColor3 = espTracerColor end
-	if distColorBtn then distColorBtn.BackgroundColor3 = espDistanceColor end
-	if nameColorBtn then nameColorBtn.BackgroundColor3 = espNameColor end
-	if skeletonColorBtn then skeletonColorBtn.BackgroundColor3 = skeletonColor end
-	if npcModeBtn then npcModeBtn.Text = "Modo: " .. tostring(npcEspMode) end
-	if npcTracerModeBtn then npcTracerModeBtn.Text = "Modo Tracer: " .. tostring(npcTracerMode) end
-	if npcBoxColorBtn then npcBoxColorBtn.BackgroundColor3 = npcEspColor end
-	if npcNameColorBtn then npcNameColorBtn.BackgroundColor3 = npcEspNameColor end
-	if npcTracerColorBtn then npcTracerColorBtn.BackgroundColor3 = npcEspTracerColor end
-	if npcDistColorBtn then npcDistColorBtn.BackgroundColor3 = npcEspDistanceColor end
-	if fovLabel then fovLabel.Text = tostring(aimbotFOV) end
-	if fovInput then fovInput.Text = tostring(aimbotFOV) end
-	if fovFill then fovFill.Size = UDim2.fromScale(math.clamp(aimbotFOV / 200, 0, 1), 1) end
-	local playerFovCircle = gui and gui:FindFirstChild("FOVCircle")
-	if playerFovCircle then playerFovCircle.Size = UDim2.fromOffset(aimbotFOV * 3, aimbotFOV * 3) end
-	if smoothLabel then smoothLabel.Text = tostring(aimbotSmooth) end
-	if smoothFill then smoothFill.Size = UDim2.fromScale(math.clamp(aimbotSmooth / 20, 0, 1), 1) end
-	if targetDropdownBtn then targetDropdownBtn.Text = "Target: " .. tostring(aimbotTarget) end
-	if npcFovValue then npcFovValue.Text = tostring(npcAimbotFOV) end
-	if npcFovFill then npcFovFill.Size = UDim2.fromScale(math.clamp(npcAimbotFOV / 200, 0, 1), 1) end
-	local npcFovCircle = gui and gui:FindFirstChild("NpcFOVCircle")
-	if npcFovCircle then npcFovCircle.Size = UDim2.fromOffset(npcAimbotFOV * 3, npcAimbotFOV * 3) end
-	if npcSmoothValue then npcSmoothValue.Text = tostring(npcAimbotSmooth) end
-	if npcSmoothFill then npcSmoothFill.Size = UDim2.fromScale(math.clamp(npcAimbotSmooth / 20, 0, 1), 1) end
-	if npcTargetBtn then npcTargetBtn.Text = "Target: " .. tostring(npcAimbotTarget) end
-	if speedTitle then speedTitle.Text = "Velocidade: " .. tostring(speedBoostValue) end
-	if speedFill then speedFill.Size = UDim2.fromScale(math.clamp(speedBoostValue / 200, 0, 1), 1) end
-	if jumpTitle then jumpTitle.Text = "Pulo: " .. tostring(jumpPowerBoostValue) end
-	if jumpFill then jumpFill.Size = UDim2.fromScale(math.clamp(jumpPowerBoostValue / 200, 0, 1), 1) end
-	if speedBoostEnabled and LocalPlayer.Character then
-		local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-		if hum then hum.WalkSpeed = speedBoostValue end
-	end
-	if jumpPowerBoostEnabled and LocalPlayer.Character then
-		local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-		if hum then hum.JumpPower = jumpPowerBoostValue end
-	end
-	if hitboxSliderLabel then hitboxSliderLabel.Text = "Size: " .. tostring(hitboxSize) end
-	if hitboxSliderInput then hitboxSliderInput.Text = tostring(hitboxSize) end
-	if hitboxColorBtn and _G.hitboxColor then hitboxColorBtn.BackgroundColor3 = _G.hitboxColor end
-	if flySpeedInput and FlySystem then flySpeedInput.Text = tostring(FlySystem.speed) end
-	if freecamSpeedInput then freecamSpeedInput.Text = tostring(freecamSpeed) end
-	if chatSpammerIntervalInput then chatSpammerIntervalInput.Text = tostring(chatSpammerInterval) end
-	if magnetSliderInput then magnetSliderInput.Text = tostring(magnetDistance) end
-	if magnetSliderLabel then magnetSliderLabel.Text = "Magnet Distance: " .. tostring(magnetDistance) end
-	if stealDistanceInput then stealDistanceInput.Text = tostring(stealDistanceValue) end
-	if stealDistanceLabel then stealDistanceLabel.Text = "Steal Distance: " .. tostring(stealDistanceValue) end
-	if stealTargetModeBtn then stealTargetModeBtn.Text = "Steal Target Mode: " .. tostring(stealTargetMode) end
-	configData.lastUsed = makeConfigTimestamp()
-	libraryData.configs[cleanName] = configData
-	libraryData.lastSelected = cleanName
-	appendConfigHistory(libraryData, cleanName, "loaded")
-	writeConfigLibrary(libraryData)
-	selectConfigName(cleanName)
-	activeConfigName = cleanName
-	refreshConfigList()
-	setConfigStatus("config loaded: " .. cleanName, Color3.fromRGB(170, 255, 170))
-	showMenuToast("Config Loaded", cleanName, Color3.fromRGB(170, 220, 255))
-	return true
-end
-
-function deleteConfig(configName)
-	local cleanName = sanitizeConfigName(configName or (configNameInput and configNameInput.Text) or selectedConfigName)
-	if not cleanName then
-		setConfigStatus("select or type a config name", Color3.fromRGB(255, 120, 120))
-		return false
-	end
-
-	local libraryData, err = readConfigLibrary()
-	if type(libraryData) ~= "table" then
-		setConfigStatus(err or "unable to read config list", Color3.fromRGB(255, 120, 120))
-		return false
-	end
-
-	if not libraryData.configs or not libraryData.configs[cleanName] then
-		setConfigStatus("config not found: " .. cleanName, Color3.fromRGB(255, 120, 120))
-		return false
-	end
-
-	appendConfigHistory(libraryData, cleanName, "deleted")
-	libraryData.configs[cleanName] = nil
-	if activeConfigName == cleanName then activeConfigName = nil end
-	if libraryData.lastSelected == cleanName then
-		libraryData.lastSelected = nil
-	end
-
-	local success, saveErr = writeConfigLibrary(libraryData, {[cleanName] = true})
-	if not success then
-		setConfigStatus("delete failed: " .. tostring(saveErr), Color3.fromRGB(255, 120, 120))
-		return false
-	end
-
-	selectConfigName(nil)
-	refreshConfigList()
-	setConfigStatus("config deleted: " .. cleanName, Color3.fromRGB(170, 255, 170))
-	showMenuToast("Config Deleted", cleanName, Color3.fromRGB(255, 160, 160))
-	return true
+	local store = nmReadStore()
+	store.ui = {
+		themeName = currentThemeName,
+		themeStyle = currentThemeStyle,
+		sizeIndex = currentSizeIndex,
+		hasCustomSizePreference = hasCustomSizePreference and true or false,
+		autoExecuteEnabled = autoExecuteEnabled,
+		language = currentUILanguage,
+		activeTab = currentTab,
+		activeMiscTab = activeMiscSubPageName,
+		mainFramePosition = packInterfacePosition(mainFrame and mainFrame.Position or menuExpandedPosition),
+		restoreButtonPosition = packInterfacePosition(restoreButtonDefaultPosition),
+		friendUserIds = collectMenuFriendIds(),
+	}
+	return nmWriteStore(store)
 end
 
 function unloadNightMenu()
@@ -17710,6 +17146,11 @@ function unloadNightMenu()
 		npcShowTracers = false
 		npcShowDistance = false
 		npcShowSkeleton = false
+		npcShowWeapon = false
+		showWeapon = false
+		npcAimbotEnabled = false
+		npcTriggerEnabled = false
+		npcHitboxEnabled = false
 		speedBoostEnabled = false
 		jumpPowerBoostEnabled = false
 		infiniteJumpEnabled = false
@@ -17732,6 +17173,8 @@ function unloadNightMenu()
 		if _G.spinLoop then _G.spinLoop:Disconnect() _G.spinLoop = nil end
 		if _G.magnetLoop then _G.magnetLoop:Disconnect() _G.magnetLoop = nil end
 		if _G.hitboxLoop then _G.hitboxLoop:Disconnect() _G.hitboxLoop = nil end
+		if _G.npcHitboxLoop then _G.npcHitboxLoop:Disconnect() _G.npcHitboxLoop = nil end
+		if restoreSpinLookDown then pcall(restoreSpinLookDown) end
 		if _G.hitboxPlayerRemovingConn then _G.hitboxPlayerRemovingConn:Disconnect() _G.hitboxPlayerRemovingConn = nil end
 		if _G.antiRagdollConn then _G.antiRagdollConn:Disconnect() _G.antiRagdollConn = nil end
 		if instantInteractConnection then instantInteractConnection:Disconnect() instantInteractConnection = nil end
@@ -17753,6 +17196,10 @@ function unloadNightMenu()
 			pcall(function() indicator:Destroy() end)
 		end
 		_G.hitboxIndicators = {}
+		for npcModel, _ in pairs(_G.npcHitboxOriginalSizes or {}) do
+			pcall(function() clearNpcHitbox(npcModel) end)
+		end
+		_G.npcHitboxOriginalSizes = {}
 	end)
 
 	pcall(function()
@@ -17820,165 +17267,6 @@ function unloadNightMenu()
 	if gui and gui.Parent then
 		gui:Destroy()
 	end
-end
-
-function exportConfig(configName)
-	local cleanName = sanitizeConfigName(configName or (configNameInput and configNameInput.Text) or selectedConfigName)
-	if not cleanName then
-		setConfigStatus("select or type a config name", Color3.fromRGB(255, 120, 120))
-		return false
-	end
-
-	local libraryData, err = readConfigLibrary()
-	if type(libraryData) ~= "table" then
-		setConfigStatus(err or "unable to read config list", Color3.fromRGB(255, 120, 120))
-		return false
-	end
-
-	local configData = libraryData.configs and libraryData.configs[cleanName]
-	if type(configData) ~= "table" then
-		setConfigStatus("config not found: " .. cleanName, Color3.fromRGB(255, 120, 120))
-		return false
-	end
-
-	updateConfigCodeBox("return " .. serializeLuaValue({
-		name = cleanName,
-		data = configData,
-	}))
-	setConfigStatus("config exported: " .. cleanName, Color3.fromRGB(170, 255, 170))
-	showMenuToast("Config Exported", cleanName, Color3.fromRGB(170, 220, 255))
-	return true
-end
-
-function importConfig(configName)
-	local rawText = configCodeBox and configCodeBox.Text or ""
-	if rawText == "" then
-		setConfigStatus("paste Lua text first", Color3.fromRGB(255, 120, 120))
-		return false
-	end
-
-	local loader = loadstring or load
-	if not loader then
-		setConfigStatus("loadstring unavailable", Color3.fromRGB(255, 120, 120))
-		return false
-	end
-
-	local chunkSuccess, chunkOrErr = pcall(function()
-		return loader(rawText)
-	end)
-	if not chunkSuccess or not chunkOrErr then
-		setConfigStatus("invalid import text", Color3.fromRGB(255, 120, 120))
-		return false
-	end
-
-	local runSuccess, payload = pcall(chunkOrErr)
-	if not runSuccess or type(payload) ~= "table" then
-		setConfigStatus("invalid imported config", Color3.fromRGB(255, 120, 120))
-		return false
-	end
-
-	local importedConfig = payload.data or payload
-	if type(importedConfig) ~= "table" then
-		setConfigStatus("import has no config data", Color3.fromRGB(255, 120, 120))
-		return false
-	end
-
-	local cleanName = sanitizeConfigName(configName or (configNameInput and configNameInput.Text) or payload.name or selectedConfigName)
-	if not cleanName then
-		setConfigStatus("insert a config name first", Color3.fromRGB(255, 120, 120))
-		return false
-	end
-
-	local libraryData, err = readConfigLibrary()
-	if type(libraryData) ~= "table" then
-		setConfigStatus(err or "unable to open config list", Color3.fromRGB(255, 120, 120))
-		return false
-	end
-
-	if libraryData.configs[cleanName] and pendingImportName ~= cleanName then
-		pendingImportName = cleanName
-		setConfigStatus("name exists, click Import again to overwrite", Color3.fromRGB(255, 210, 120))
-		showMenuToast("Import Warning", cleanName .. " already exists", Color3.fromRGB(255, 210, 120))
-		return false
-	end
-
-	pendingImportName = nil
-	local existingConfig = libraryData.configs[cleanName]
-	importedConfig.createdAt = importedConfig.createdAt or makeConfigTimestamp()
-	importedConfig.lastUsed = importedConfig.lastUsed or "--"
-	if importedConfig.favorite == nil then importedConfig.favorite = existingConfig and existingConfig.favorite == true or false end
-	if importedConfig.quickBind == nil then importedConfig.quickBind = existingConfig and existingConfig.quickBind or nil end
-	libraryData.configs[cleanName] = importedConfig
-	libraryData.lastSelected = cleanName
-	appendConfigHistory(libraryData, cleanName, "imported")
-
-	local success, saveErr = writeConfigLibrary(libraryData)
-	if not success then
-		setConfigStatus("import failed: " .. tostring(saveErr), Color3.fromRGB(255, 120, 120))
-		return false
-	end
-
-	selectConfigName(cleanName)
-	refreshConfigList()
-	setConfigStatus("config imported: " .. cleanName, Color3.fromRGB(170, 255, 170))
-	showMenuToast("Config Imported", cleanName, Color3.fromRGB(170, 255, 170))
-	return true
-end
-
-function renameConfig(newName)
-	if not selectedConfigName then
-		setConfigStatus("select a config to rename", Color3.fromRGB(255, 120, 120))
-		return false
-	end
-
-	local cleanName = sanitizeConfigName(newName or (configNameInput and configNameInput.Text))
-	if not cleanName then
-		setConfigStatus("insert a new config name", Color3.fromRGB(255, 120, 120))
-		return false
-	end
-
-	local libraryData, err = readConfigLibrary()
-	if type(libraryData) ~= "table" then
-		setConfigStatus(err or "unable to read config list", Color3.fromRGB(255, 120, 120))
-		return false
-	end
-
-	local oldData = libraryData.configs and libraryData.configs[selectedConfigName]
-	if type(oldData) ~= "table" then
-		setConfigStatus("selected config no longer exists", Color3.fromRGB(255, 120, 120))
-		return false
-	end
-
-	if cleanName ~= selectedConfigName and libraryData.configs[cleanName] and pendingRenameName ~= cleanName then
-		pendingRenameName = cleanName
-		setConfigStatus("name exists, click Rename again to overwrite", Color3.fromRGB(255, 210, 120))
-		showMenuToast("Rename Warning", cleanName .. " already exists", Color3.fromRGB(255, 210, 120))
-		return false
-	end
-
-	pendingRenameName = nil
-	libraryData.configs[selectedConfigName] = nil
-	oldData.createdAt = oldData.createdAt or makeConfigTimestamp()
-	oldData.lastUsed = oldData.lastUsed or "--"
-	libraryData.configs[cleanName] = oldData
-	libraryData.lastSelected = cleanName
-	for _, event in ipairs(libraryData.history or {}) do
-		if type(event) == "table" and event.name == selectedConfigName then event.name = cleanName end
-	end
-	appendConfigHistory(libraryData, cleanName, "renamed", selectedConfigName)
-
-	local success, saveErr = writeConfigLibrary(libraryData, {[selectedConfigName] = true})
-	if not success then
-		setConfigStatus("rename failed: " .. tostring(saveErr), Color3.fromRGB(255, 120, 120))
-		return false
-	end
-
-	if activeConfigName == selectedConfigName then activeConfigName = cleanName end
-	selectConfigName(cleanName)
-	refreshConfigList()
-	setConfigStatus("config renamed: " .. cleanName, Color3.fromRGB(170, 255, 170))
-	showMenuToast("Config Renamed", cleanName, Color3.fromRGB(170, 255, 170))
-	return true
 end
 
 -- Continuous aiming
@@ -18067,6 +17355,7 @@ RunService.RenderStepped:Connect(function()
 							if showTracers then ensureTracer(character) end
 							if showEspDistance then ensureDistanceLabel(character) end
 							if showName then ensureNameLabel(character, player) end
+							if showWeapon then ensureWeaponLabel(character, player) end
 							if showHealth then ensureHealthBar(character) end
 						end)
 					end
@@ -18089,6 +17378,12 @@ RunService.RenderStepped:Connect(function()
 			if not validChars[char] then
 				pcall(function() nameLabels[char]:Remove() end)
 				nameLabels[char] = nil
+			end
+		end
+		for char, _ in pairs(weaponLabels) do
+			if not validChars[char] then
+				pcall(function() weaponLabels[char]:Remove() end)
+				weaponLabels[char] = nil
 			end
 		end
 		for char, _ in pairs(distanceLabels) do
@@ -18117,7 +17412,7 @@ RunService.RenderStepped:Connect(function()
 	end
 
 	-- NPC ESP (throttled scan) — also scan when aimbot needs targets
-	if npcEspEnabled or npcAimbotEnabled or npcTriggerEnabled or npcHitboxEnabled then
+	if npcEspEnabled or npcAimbotEnabled or npcTriggerEnabled or npcHitboxEnabled or npcShowWeapon then
 		local now = tick()
 		if now - npcEspLastScanTime >= npcEspScanInterval then
 			npcEspLastScanTime = now
@@ -18135,6 +17430,7 @@ RunService.RenderStepped:Connect(function()
 					pcall(function() if npcShowTracers then ensureNpcTracer(model) end end)
 					pcall(function() if npcShowDistance then ensureNpcDistanceLabel(model) end end)
 					pcall(function() if npcShowName then ensureNpcNameLabel(model) end end)
+					pcall(function() if npcShowWeapon then ensureNpcWeaponLabel(model) end end)
 					pcall(function() if npcShowHealth then ensureNpcHealthBar(model) end end)
 				end
 			end
@@ -18160,6 +17456,12 @@ RunService.RenderStepped:Connect(function()
 			if not validNpcs[m] then
 				pcall(function() npcNameLabels[m]:Remove() end)
 				npcNameLabels[m] = nil
+			end
+		end
+		for m, _ in pairs(npcWeaponLabels) do
+			if not validNpcs[m] then
+				pcall(function() npcWeaponLabels[m]:Remove() end)
+				npcWeaponLabels[m] = nil
 			end
 		end
 		for m, _ in pairs(npcDistanceLabels) do
@@ -18213,6 +17515,9 @@ function clearAllESPVisuals()
 	for char, label in pairs(nameLabels) do
 		if label then pcall(function() label:Remove() end) end
 	end
+	for char, label in pairs(weaponLabels) do
+		if label then pcall(function() label:Remove() end) end
+	end
 	for char, bar in pairs(healthBars) do
 		if bar then
 			pcall(function()
@@ -18227,6 +17532,7 @@ function clearAllESPVisuals()
 	tracers = {}
 	distanceLabels = {}
 	nameLabels = {}
+	weaponLabels = {}
 	healthBars = {}
 end
 
@@ -18250,6 +17556,7 @@ function initESPPlayerEvents()
 			if highlights[character] then pcall(function() highlights[character]:Destroy() end) highlights[character] = nil end
 			if boxes[character] then pcall(function() boxes[character]:Destroy() end) boxes[character] = nil end
 			if nameLabels[character] then pcall(function() nameLabels[character]:Remove() end) nameLabels[character] = nil end
+			if weaponLabels[character] then pcall(function() weaponLabels[character]:Remove() end) weaponLabels[character] = nil end
 			if distanceLabels[character] then pcall(function() distanceLabels[character]:Remove() end) distanceLabels[character] = nil end
 			if tracers[character] then pcall(function() tracers[character]:Remove() end) tracers[character] = nil end
 			if healthBars[character] then
@@ -18302,20 +17609,7 @@ function bootNightMenu()
 		if utilPage then
 			utilPage.CanvasPosition = Vector2.new(0, 0)
 		end
-		local libraryData = readConfigLibrary()
-		if type(libraryData) == "table" then
-			local lastSelected = libraryData.lastSelected
-			if type(lastSelected) == "string" and type(libraryData.configs[lastSelected]) == "table" then
-				selectConfigName(lastSelected)
-			else
-				selectConfigName(nil)
-				if lastSelected ~= nil then
-					libraryData.lastSelected = nil
-					writeConfigLibrary(libraryData)
-				end
-			end
-		end
-		refreshConfigList()
+		nmRefreshProfiles()
 	end)
 	if not success then
 		warn("Erro ao inicializar painel: " .. tostring(err))
@@ -18324,23 +17618,18 @@ end
 
 bootNightMenu()
 
-createConfigActionButton(configInfoCard, "CREATE CONFIG", 0, 156, 0.48, function()
-	saveConfig()
+nmMakeButton(configInfoCard, "SAVE PROFILE", 0, 458, 0.4, function()
+	nmSaveProfile()
 end)
 
-createConfigActionButton(configInfoCard, "CLEAR", 0.52, 156, 0.22, function()
-	if configNameInput then
-		configNameInput.Text = ""
-	end
-	setConfigStatus("name cleared - type a new config name", Color3.fromRGB(170, 255, 170))
+nmMakeButton(configInfoCard, "CLEAR", 0.42, 458, 0.26, function()
+	if nmNameInput then nmNameInput.Text = "" end
+	nmSelected = nil
+	nmSetStatus("name cleared", Color3.fromRGB(170, 255, 170))
 end)
 
-createConfigActionButton(configInfoCard, "UPDATE CONFIG", 0.74, 156, 0.24, function()
-	if not selectedConfigName then
-		setConfigStatus("select a config to update", Color3.fromRGB(255, 120, 120))
-		return
-	end
-	saveConfig(selectedConfigName, true)
+nmMakeButton(configInfoCard, "DELETE", 0.70, 458, 0.30, function()
+	nmDeleteProfile()
 end)
 
 THEME_PRESETS = {
@@ -18831,118 +18120,57 @@ autoExecThemeBtn.MouseButton1Click:Connect(function()
 	end
 end)
 
-createConfigActionButton(configInfoCard, "Load", 0, 580, 0.32, function()
-	loadConfig()
+nmMakeButton(configInfoCard, "LOAD", 0, 500, 1, function()
+	nmLoadProfile()
 end)
 
-createConfigActionButton(configInfoCard, "Delete", 0.34, 580, 0.32, function()
-	deleteConfig()
-end)
-
-createConfigActionButton(configInfoCard, "Rename", 0.68, 580, 0.32, function()
-	renameConfig()
-end)
-
-createConfigActionButton(configInfoCard, "Export", 0, 620, 0.32, function()
-	exportConfig()
-end)
-
-createConfigActionButton(configInfoCard, "Import", 0.34, 620, 0.32, function()
-	importConfig()
-end)
-
-createConfigActionButton(configInfoCard, "History", 0.68, 620, 0.32, function()
-	showConfigHistory()
-end)
-
-createConfigActionButton(configInfoCard, "Unload", 0, 662, 1, function()
+nmMakeButton(configInfoCard, "Unload", 0, 662, 1, function()
 	unloadNightMenu()
 end)
 
 function applyStoredMenuSettings()
-	local libraryData = readConfigLibrary()
-	if type(libraryData) ~= "table" then
-		updateThemeStatus()
-		if autoExecuteEnabled then
-			setupAutoExecute()
-		end
-		return
-	end
+	local store = nmReadStore()
+	local settings = store.ui or {}
 
 	suppressThemeFeedback = true
-		local settings = libraryData.settings
+	pcall(function()
 		if type(settings.friendUserIds) == "table" then
 			playerFriendIds = {}
-			for _, userId in ipairs(settings.friendUserIds) do
-				playerFriendIds[tostring(userId)] = true
-			end
-		if currentAimbotTarget and isMenuFriend(currentAimbotTarget) then currentAimbotTarget = nil end
-		if magnetTarget and isMenuFriend(magnetTarget) and stopMagnet then stopMagnet() end
-		if infinitePushTarget and isMenuFriend(infinitePushTarget) and stopInfinitePush then stopInfinitePush() end
-		if killTargetPlayer and isMenuFriend(killTargetPlayer) and stopKilling then stopKilling() end
-			for _, player in ipairs(Players:GetPlayers()) do
-				updatePlayerFriendVisual(player)
-				if player.Character and refreshESPForPlayer then
-					pcall(function() refreshESPForPlayer(player) end)
-				end
+			for _, userId in ipairs(settings.friendUserIds) do playerFriendIds[tostring(userId)] = true end
+			if currentAimbotTarget and isMenuFriend(currentAimbotTarget) then currentAimbotTarget = nil end
+			if magnetTarget and isMenuFriend(magnetTarget) and stopMagnet then stopMagnet() end
+			if infinitePushTarget and isMenuFriend(infinitePushTarget) and stopInfinitePush then stopInfinitePush() end
+			if killTargetPlayer and isMenuFriend(killTargetPlayer) and stopKilling then stopKilling() end
+			for _, plr in ipairs(Players:GetPlayers()) do
+				updatePlayerFriendVisual(plr)
+				if plr.Character and refreshESPForPlayer then pcall(refreshESPForPlayer, plr) end
 			end
 		end
-	if type(settings) == "table" then
-		if type(settings.configSaveShortcut) == "string" then configSaveShortcut = settings.configSaveShortcut end
-		if type(settings.configLoadShortcut) == "string" then configLoadShortcut = settings.configLoadShortcut end
-		updateConfigShortcutButtons()
-	end
-	if type(settings) == "table" then
-		if settings.autoExecuteEnabled ~= nil then
-			autoExecuteEnabled = settings.autoExecuteEnabled and true or false
-		end
-		if settings.hasCustomSizePreference ~= nil then
-			hasCustomSizePreference = settings.hasCustomSizePreference and true or false
-		end
+		if settings.autoExecuteEnabled ~= nil then autoExecuteEnabled = settings.autoExecuteEnabled and true or false end
+		if settings.hasCustomSizePreference ~= nil then hasCustomSizePreference = settings.hasCustomSizePreference and true or false end
 		if type(settings.language) == "string" and LANGUAGE_NAMES[settings.language] then
 			currentUILanguage = settings.language
 			refreshLocalizedMenuText()
-			if refreshLanguageOptionButtons then
-				refreshLanguageOptionButtons()
-			end
+			if refreshLanguageOptionButtons then refreshLanguageOptionButtons() end
 		end
-		if settings.themeName and THEME_PRESETS[settings.themeName] then
-			applyThemePreset(settings.themeName)
+		if settings.themeName and THEME_PRESETS[settings.themeName] then applyThemePreset(settings.themeName) end
+		if settings.themeStyle and THEME_STYLES[settings.themeStyle] then applyThemeStyle(settings.themeStyle) end
+		if hasCustomSizePreference and settings.sizeIndex and menuSizes and menuSizes[settings.sizeIndex] then applyThemeSize(settings.sizeIndex) end
+		if type(settings.activeMiscTab) == "string" and miscSubPages[settings.activeMiscTab] then setMiscSubTab(settings.activeMiscTab) end
+		if type(settings.activeTab) == "string" and tabs[settings.activeTab] and pages[settings.activeTab] then setTab(settings.activeTab) end
+		local storedMain = unpackInterfacePosition(settings.mainFramePosition)
+		if storedMain then mainFrame.Position = storedMain menuExpandedPosition = storedMain end
+		local storedRestore = unpackInterfacePosition(settings.restoreButtonPosition)
+		if storedRestore then
+			restoreButtonDefaultPosition = storedRestore
+			if restoreButton then restoreButton.Position = storedRestore end
 		end
-		if settings.themeStyle and THEME_STYLES[settings.themeStyle] then
-			applyThemeStyle(settings.themeStyle)
-		end
-		if hasCustomSizePreference and settings.sizeIndex and menuSizes and menuSizes[settings.sizeIndex] then
-			applyThemeSize(settings.sizeIndex)
-		end
-		if type(settings.activeMiscTab) == "string" and miscSubPages[settings.activeMiscTab] then
-			setMiscSubTab(settings.activeMiscTab)
-		end
-		if type(settings.activeTab) == "string" and tabs[settings.activeTab] and pages[settings.activeTab] then
-			setTab(settings.activeTab)
-		end
-
-		local storedMainPosition = unpackInterfacePosition(settings.mainFramePosition)
-		if storedMainPosition then
-			mainFrame.Position = storedMainPosition
-			menuExpandedPosition = storedMainPosition
-		end
-
-		local storedRestorePosition = unpackInterfacePosition(settings.restoreButtonPosition)
-		if storedRestorePosition then
-			restoreButtonDefaultPosition = storedRestorePosition
-			if restoreButton then
-				restoreButton.Position = storedRestorePosition
-			end
-		end
-	end
+	end)
 	suppressThemeFeedback = false
-
-	updateThemeStatus()
-	if autoExecuteEnabled then
-		setupAutoExecute()
-	end
+	pcall(updateThemeStatus)
+	if autoExecuteEnabled then pcall(setupAutoExecute) end
 end
+
 
 applyStoredMenuSettings()
 
@@ -19120,7 +18348,7 @@ end)
 task.defer(function()
 	refreshLocalizedMenuText()
 	updateThemeStatus()
-	refreshConfigList()
+	nmRefreshProfiles()
 end)
 
 end
