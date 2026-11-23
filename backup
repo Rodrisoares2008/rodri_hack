@@ -188,8 +188,40 @@ UI_TOGGLE_KEY = Enum.KeyCode.M
 FREEFLY_TOGGLE_KEY = Enum.KeyCode.F
 UNLOCK_MOUSE_KEY = Enum.KeyCode.P
 
+-- Roblox nao possui UserInputType.MouseButton4/5 (X1/X2). Executores que
+-- injetam os botoes laterais reportam por nome ou por KeyCode.MouseBackButton.
+local SIDE_MOUSE_ALIASES = {
+	X1 = {MouseButton4 = true, MouseX1 = true, X1 = true, MouseBackButton = true, ButtonX1 = true},
+	X2 = {MouseButton5 = true, MouseX2 = true, X2 = true, MouseForwardButton = true, ButtonX2 = true},
+}
+
+local function getSideMouseButton(input)
+	if not input then return nil end
+	local function inputName(v)
+		if typeof(v) == "EnumItem" then return v.Name end
+		if type(v) == "string" then return v end
+		return ""
+	end
+	local utName = inputName(input.UserInputType)
+	local kcName = inputName(input.KeyCode)
+	if SIDE_MOUSE_ALIASES.X1[utName] or SIDE_MOUSE_ALIASES.X1[kcName] then return "X1" end
+	if SIDE_MOUSE_ALIASES.X2[utName] or SIDE_MOUSE_ALIASES.X2[kcName] then return "X2" end
+	return nil
+end
+
+local function sideMouseMatches(bindValue, side)
+	if not side then return false end
+	if bindValue == side or bindValue == "Mouse" .. side then return true end
+	if side == "X1" and bindValue == "MouseButton4" then return true end
+	if side == "X2" and bindValue == "MouseButton5" then return true end
+	return false
+end
+
 local function getBindableInput(input)
 	if not input then return nil, nil end
+
+	local side = getSideMouseButton(input)
+	if side then return side, side end
 
 	if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode then
 		return input.KeyCode, input.KeyCode.Name
@@ -210,6 +242,8 @@ end
 
 local function inputMatchesBind(input, bindValue)
 	if not input or not bindValue then return false end
+
+	if sideMouseMatches(bindValue, getSideMouseButton(input)) then return true end
 
 	if typeof(bindValue) == "EnumItem" then
 		return input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == bindValue
@@ -232,6 +266,8 @@ local function bindDisplayName(bindValue, fallbackName)
 	if typeof(bindValue) == "EnumItem" then
 		return bindValue.Name
 	end
+	if bindValue == "MouseButton4" then return "X1" end
+	if bindValue == "MouseButton5" then return "X2" end
 
 	return fallbackName or tostring(bindValue)
 end
@@ -4615,7 +4651,8 @@ function getNPCsFromWorkspace()
 	local npcs = {}
 	local myChar = LocalPlayer.Character
 	local myRoot = myChar and getPrimaryPart(myChar)
-	if not myRoot then return npcs end
+	-- Sem root (morte/respawn) nao substitui a cache: isso apagava o ESP e fazia piscar
+	if not myRoot then return nil end
 
 	-- Sem filtro de "onScreen" aqui: NPCs fora do ecra no momento do scan ficavam
 	-- fora da cache durante o intervalo inteiro e o ESP so aparecia depois ("reload").
@@ -4679,20 +4716,25 @@ function ensureNpcHighlight(model)
 			local rayOrigin = workspace.CurrentCamera.CFrame.Position
 			local rayDir = (targetRoot.Position - rayOrigin).Unit * 100
 			local raycastParams = RaycastParams.new()
-			raycastParams.FilterDescendantsInstances = {LocalPlayer.Character, model}
+			local ignore = {model}
+			if myChar then table.insert(ignore, myChar) end
+			raycastParams.FilterDescendantsInstances = ignore
 			raycastParams.FilterType = Enum.RaycastFilterType.Exclude
 			local result = workspace:Raycast(rayOrigin, rayDir, raycastParams)
 			visibility = {visible = (result == nil), at = now}
 			npcVisibilityCache[model] = visibility
 		end
 		if visibility.visible then
-			h.FillColor = Color3.fromRGB(0, 255, 0)
-			h.OutlineColor = Color3.fromRGB(0, 255, 0)
+			-- Cor escolhida no botao COLOR quando visivel
+			h.FillColor = npcSkeletonColor
+			h.OutlineColor = npcSkeletonColor
 		else
+			-- Vermelho quando oculto
 			h.FillColor = Color3.fromRGB(255, 0, 0)
 			h.OutlineColor = Color3.fromRGB(255, 0, 0)
 		end
-	elseif not npcAutoEspEnabled then
+	else
+		-- Sem Auto ESP (ou sem root para o raycast): usa sempre a cor escolhida
 		h.FillColor = npcSkeletonColor
 		h.OutlineColor = npcSkeletonColor
 	end
@@ -10884,14 +10926,13 @@ npcSkeletonColorBtn.MouseButton1Click:Connect(function()
 	npcSkeletonColorBtn.BackgroundColor3 = npcSkeletonColor
 	local brightness = npcSkeletonColor.R * 0.299 + npcSkeletonColor.G * 0.587 + npcSkeletonColor.B * 0.114
 	npcSkeletonColorBtn.TextColor3 = brightness > 0.72 and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
-	if not npcAutoEspEnabled then
-		for m, h in pairs(npcHighlights) do
-			if h then
-				pcall(function()
-					h.FillColor = npcSkeletonColor
-					h.OutlineColor = npcSkeletonColor
-				end)
-			end
+	for m, h in pairs(npcHighlights) do
+		local vis = npcVisibilityCache[m]
+		if h and (not npcAutoEspEnabled or not vis or vis.visible) then
+			pcall(function()
+				h.FillColor = npcSkeletonColor
+				h.OutlineColor = npcSkeletonColor
+			end)
 		end
 	end
 end)
@@ -10961,7 +11002,7 @@ npcAutoEspFrame.Parent = npcEspConfigContent
 
 createToggle(npcAutoEspFrame, "Auto ESP (Visible/Hidden)", function(enabled)
 	npcAutoEspEnabled = enabled
-end, "Color NPCs based on visibility: green=visible, red=hidden.", {configKey = "npc_auto_esp"})
+end, "Skeleton uses your COLOR when visible, red when hidden.", {configKey = "npc_auto_esp"})
 
 -- NPC Tracer Mode: Sky/Center
 npcTracerModeFrame = Instance.new("Frame")
@@ -12568,6 +12609,31 @@ autofireEnabled = false
 VirtualInputManager = game:GetService("VirtualInputManager")
 autofireCooldown = 0.08
 lastAutofireShot = 0
+autofireMode = "Toggle" -- "Toggle" ou "Hold"
+autofireKeyHeld = false
+autofireMaxDistance = 150 -- studs; 0 = sem limite
+autofireTriggerDelay = 0.10 -- o alvo precisa ficar na mira por este tempo antes de atirar
+autofireCandidateSince = 0
+npcTriggerCandidateSince = 0
+
+-- Valores do botao de delay do trigger (segundos)
+AUTOFIRE_DELAY_STEPS = {0, 0.03, 0.06, 0.10, 0.15, 0.25, 0.40, 0.60}
+
+-- Tenta usar o alcance real da arma (atributos/values comuns) e limita ao valor do menu
+function getAutofireRange()
+	if autofireMaxDistance <= 0 then return math.huge end
+	local myChar = LocalPlayer.Character
+	local tool = myChar and myChar:FindFirstChildOfClass("Tool")
+	if tool then
+		for _, name in ipairs({"Range", "MaxRange", "AttackRange", "WeaponRange"}) do
+			local attr = tool:GetAttribute(name)
+			if type(attr) == "number" and attr > 0 then return math.min(attr, autofireMaxDistance) end
+			local val = tool:FindFirstChild(name)
+			if val and type(val.Value) == "number" and val.Value > 0 then return math.min(val.Value, autofireMaxDistance) end
+		end
+	end
+	return autofireMaxDistance
+end
 
 function canTriggerOnPlayer(player)
 	if player and isMenuFriend(player) then return false end
@@ -12578,7 +12644,101 @@ function canTriggerOnPlayer(player)
 	local root = player.Character:FindFirstChild("HumanoidRootPart")
 	if not humanoid or humanoid.Health <= 0 or not root then return false end
 
+	-- So atira se o tiro alcanca o alvo (evita trigger em player muito longe)
+	local myChar = LocalPlayer.Character
+	local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+	local maxRange = getAutofireRange()
+	if myRoot and maxRange ~= math.huge and (root.Position - myRoot.Position).Magnitude > maxRange then return false end
+
 	return true
+end
+
+-- So confirma o tiro se a mira (centro da tela) estiver realmente no model
+function crosshairOnModel(model, maxDist, strict)
+	local camera = workspace.CurrentCamera
+	if not camera or not model then return false end
+	local vp = camera.ViewportSize
+	local ray = camera:ViewportPointToRay(vp.X / 2, vp.Y / 2)
+	local limit = maxDist or 1000
+
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Include
+	params.FilterDescendantsInstances = {model}
+	params.IgnoreWater = true
+	local hit = workspace:Raycast(ray.Origin, ray.Direction * limit, params)
+	if hit and hit.Instance then
+		if hit.Instance:FindFirstAncestorOfClass("Model") == model then return true end
+	end
+
+	-- Fallback: distancia do centro da mira ate o root do model
+	local root = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
+	if root then
+		local to = root.Position - ray.Origin
+		local along = to:Dot(ray.Direction)
+		if along > 0 and along <= limit then
+			local closest = ray.Origin + ray.Direction * along
+			local off = (root.Position - closest).Magnitude
+			-- No trigger exige mira practically em cima (evita tiro no vazio)
+			if strict then return off <= 2 end
+			if off <= math.clamp(2.5 + along * 0.02, 3, 9) then return true end
+		end
+	end
+	return false
+end
+
+-- Jogos tipo CS2: paredes finas/materiais macios sao perfuraveis pela bala.
+TRIGGER_WALL_PENETRATION = true
+
+local PENETRABLE_MATERIALS = {
+	Wood = true, WoodPlanks = true, Plastic = true, Glass = true,
+	Ice = true, Snow = true, Fabric = true, Paper = true,
+	Cardboard = true, Foliage = true, LeafyGrass = true,
+	Grass = true, Sand = true, Slate = true, Aluminum = true,
+}
+
+local function isPenetrablePart(part)
+	if not part or not part:IsA("BasePart") then return false end
+	-- Personagens nunca contam como parede
+	local model = part:FindFirstAncestorOfClass("Model")
+	if model and model:FindFirstChildOfClass("Humanoid") then return false end
+	if part:GetAttribute("Penetrable") == true or part:GetAttribute("CanPenetrate") == true
+		or part:GetAttribute("BulletPenetration") == true then return true end
+	if PENETRABLE_MATERIALS[part.Material and part.Material.Name or ""] then
+		-- Mesmo material macio so e perfurado se a parede for fina
+		local s = part.Size
+		return math.min(s.X, s.Y, s.Z) <= 2
+	end
+	return false
+end
+
+-- Raycast que ignora paredes perfuraveis e devolve o primeiro bloqueio solido
+local function raycastSkipPenetrable(origin, direction, maxDist, ignored)
+	local ignore = {}
+	for _, v in ipairs(ignored or {}) do if v then table.insert(ignore, v) end end
+	local start = origin
+	local travelled = 0
+	for _ = 1, 6 do
+		local remain = maxDist - travelled
+		if remain <= 0.05 then return nil end
+		local params = RaycastParams.new()
+		params.FilterType = Enum.RaycastFilterType.Exclude
+		params.FilterDescendantsInstances = ignore
+		params.IgnoreWater = true
+		local hit = workspace:Raycast(start, direction * remain, params)
+		if not hit then return nil end
+		travelled = travelled + (hit.Position - start).Magnitude
+		if not TRIGGER_WALL_PENETRATION or not isPenetrablePart(hit.Instance) then return hit end
+		table.insert(ignore, hit.Instance)
+		start = hit.Position + direction * 0.05
+	end
+	return nil
+end
+
+local function hasClearShot(origin, endPos, ignored)
+	local delta = endPos - origin
+	local dist = delta.Magnitude
+	if dist < 0.01 then return true end
+	return raycastSkipPenetrable(origin, delta.Unit, dist, ignored) == nil
 end
 
 function fireAutofireShot()
@@ -12598,15 +12758,20 @@ function fireAutofireShot()
 		pcall(function() mouse1click() end)
 	end
 
+	-- Clique no CENTRO da tela (0,0 atirava para o canto/chao em alguns jogos)
+	local cam = workspace.CurrentCamera
+	local vp = cam and cam.ViewportSize or Vector2.new(1920, 1080)
+	local cx, cy = vp.X / 2, vp.Y / 2
+
 	pcall(function()
-		VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 1)
-		VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 1)
+		VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, true, game, 1)
+		VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, false, game, 1)
 	end)
 
 	if typeof(VirtualUser) == "Instance" then
 		pcall(function()
-			VirtualUser:Button1Down(Vector2.new(0, 0))
-			VirtualUser:Button1Up(Vector2.new(0, 0))
+			VirtualUser:Button1Down(Vector2.new(cx, cy))
+			VirtualUser:Button1Up(Vector2.new(cx, cy))
 		end)
 	end
 end
@@ -12616,14 +12781,15 @@ autofireToggle = createToggle(combatContent, "Autofire (Triggerbot)", function(e
 	if enabled then
 		lastAutofireShot = 0
 		_G.autofireLoop = RunService.RenderStepped:Connect(function()
-			if panelVisible or not autofireEnabled then return end
+			if panelVisible or not autofireEnabled then autofireCandidateSince = 0 return end
+			if autofireMode == "Hold" and not autofireKeyHeld then autofireCandidateSince = 0 return end
 
 			local camera = workspace.CurrentCamera
-			if not camera then return end
+			if not camera then autofireCandidateSince = 0 return end
 
 			local localCharacter = LocalPlayer.Character
 			local localHumanoid = localCharacter and localCharacter:FindFirstChildOfClass("Humanoid")
-			if not localCharacter or not localHumanoid or localHumanoid.Health <= 0 then return end
+			if not localCharacter or not localHumanoid or localHumanoid.Health <= 0 then autofireCandidateSince = 0 return end
 
 			local targetPlayer = currentAimbotTarget
 			if not canTriggerOnPlayer(targetPlayer) then
@@ -12642,21 +12808,21 @@ autofireToggle = createToggle(combatContent, "Autofire (Triggerbot)", function(e
 				end
 			end
 
-			if not canTriggerOnPlayer(targetPlayer) then return end
+			local canShoot = false
+			if canTriggerOnPlayer(targetPlayer) and crosshairOnModel(targetPlayer.Character, 1000, true) then
+				local origin = camera.CFrame.Position
+				local targetRoot = targetPlayer.Character:FindFirstChild("HumanoidRootPart")
+				if targetRoot and hasClearShot(origin, targetRoot.Position, {localCharacter, camera, targetPlayer.Character}) then
+					canShoot = true
+				end
+			end
 
-			local origin = camera.CFrame.Position
-			local direction = targetPlayer.Character.HumanoidRootPart.Position - origin
-			local rayParams = RaycastParams.new()
-			rayParams.FilterDescendantsInstances = {localCharacter, camera}
-			rayParams.FilterType = Enum.RaycastFilterType.Exclude
-			rayParams.IgnoreWater = true
+			if not canShoot then autofireCandidateSince = 0 return end
 
-			local result = workspace:Raycast(origin, direction, rayParams)
-			if not result or not result.Instance then return end
-
-			local hitCharacter = result.Instance:FindFirstAncestorOfClass("Model")
-			local hitPlayer = Players:GetPlayerFromCharacter(hitCharacter)
-			if hitPlayer ~= targetPlayer then return end
+			-- So dispara depois que o alvo ficou na mira pelo delay configurado
+			local now = tick()
+			if autofireCandidateSince == 0 then autofireCandidateSince = now end
+			if now - autofireCandidateSince < autofireTriggerDelay then return end
 
 			fireAutofireShot()
 		end)
@@ -12672,6 +12838,126 @@ end, "Fires automatically when Aimbot has a clear target.", {
 		autofireBindString = bindDisplayName(bindValue, bindName)
 	end,
 })
+
+-- Triggerbot: alterna entre atirar sempre (Toggle) e so enquanto segura o bind (Hold)
+do
+	local oldAutofireBindAction = toggleBindActions["autofire"]
+	toggleBindActions["autofire"] = function()
+		if autofireMode == "Hold" then return end
+		if oldAutofireBindAction then oldAutofireBindAction() end
+	end
+end
+
+autofireModeFrame = Instance.new("Frame")
+autofireModeFrame.Size = UDim2.new(1, 0, 0, 46)
+autofireModeFrame.BackgroundTransparency = 1
+autofireModeFrame.Parent = combatContent
+
+autofireModeBtn = Instance.new("TextButton")
+autofireModeBtn.Size = UDim2.new(1, 0, 0, 40)
+autofireModeBtn.BackgroundColor3 = SAKURA.primary
+autofireModeBtn.BackgroundTransparency = 0.2
+autofireModeBtn.Text = "Trigger: " .. autofireMode
+autofireModeBtn.Font = Enum.Font.GothamBold
+autofireModeBtn.TextSize = 14
+autofireModeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+autofireModeBtn.Parent = autofireModeFrame
+Instance.new("UICorner", autofireModeBtn).CornerRadius = UDim.new(0, 8)
+
+autofireModeBtn.MouseButton1Click:Connect(function()
+	autofireMode = (autofireMode == "Toggle") and "Hold" or "Toggle"
+	autofireModeBtn.Text = "Trigger: " .. autofireMode
+	autofireKeyHeld = false
+end)
+
+UserInputService.InputBegan:Connect(function(input, processed)
+	if processed then return end
+	if autofireMode == "Hold" and inputMatchesBind(input, autofireBind) then
+		autofireKeyHeld = true
+	end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+	if inputMatchesBind(input, autofireBind) then
+		autofireKeyHeld = false
+	end
+end)
+
+-- Alcance maximo do trigger (nao atira em alvo fora do dano)
+autofireRangeFrame = Instance.new("Frame")
+autofireRangeFrame.Size = UDim2.new(1, 0, 0, 46)
+autofireRangeFrame.BackgroundTransparency = 1
+autofireRangeFrame.Parent = combatContent
+
+autofireRangeTitle = Instance.new("TextLabel")
+autofireRangeTitle.Size = UDim2.new(1, 0, 0, 18)
+autofireRangeTitle.BackgroundTransparency = 1
+autofireRangeTitle.Font = Enum.Font.GothamBold
+autofireRangeTitle.TextSize = 12
+autofireRangeTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+autofireRangeTitle.Text = "Alcance do Trigger: " .. autofireMaxDistance
+autofireRangeTitle.Parent = autofireRangeFrame
+
+autofireRangeSlider = Instance.new("Frame")
+autofireRangeSlider.Size = UDim2.new(1, 0, 0, 14)
+autofireRangeSlider.Position = UDim2.new(0, 0, 0, 22)
+autofireRangeSlider.BackgroundColor3 = C.SliderBg
+autofireRangeSlider.Parent = autofireRangeFrame
+Instance.new("UICorner", autofireRangeSlider).CornerRadius = UDim.new(0, 5)
+
+autofireRangeFill = Instance.new("Frame")
+autofireRangeFill.Size = UDim2.fromScale(autofireMaxDistance / 300, 1)
+autofireRangeFill.BackgroundColor3 = C.Accent
+autofireRangeFill.Parent = autofireRangeSlider
+Instance.new("UICorner", autofireRangeFill).CornerRadius = UDim.new(0, 4)
+
+autofireRangeDragging = false
+autofireRangeSlider.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then autofireRangeDragging = true end
+end)
+UserInputService.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then autofireRangeDragging = false end
+end)
+UserInputService.InputChanged:Connect(function(input)
+	if autofireRangeDragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+		local mp = UserInputService:GetMouseLocation()
+		local sp = autofireRangeSlider.AbsolutePosition
+		local ss = autofireRangeSlider.AbsoluteSize
+		local rel = math.clamp((mp.X - sp.X) / ss.X, 0, 1)
+		autofireMaxDistance = math.max(5, math.floor(rel * 300))
+		autofireRangeTitle.Text = "Alcance do Trigger: " .. autofireMaxDistance
+		autofireRangeFill.Size = UDim2.fromScale(autofireMaxDistance / 300, 1)
+	end
+end)
+
+-- Delay do trigger: o alvo tem que ficar na mira antes de atirar
+autofireDelayFrame = Instance.new("Frame")
+autofireDelayFrame.Size = UDim2.new(1, 0, 0, 46)
+autofireDelayFrame.BackgroundTransparency = 1
+autofireDelayFrame.Parent = combatContent
+
+autofireDelayBtn = Instance.new("TextButton")
+autofireDelayBtn.Size = UDim2.new(1, 0, 0, 40)
+autofireDelayBtn.BackgroundColor3 = SAKURA.primary
+autofireDelayBtn.BackgroundTransparency = 0.2
+autofireDelayBtn.Text = "Delay do Trigger: " .. string.format("%.2f", autofireTriggerDelay) .. "s"
+autofireDelayBtn.Font = Enum.Font.GothamBold
+autofireDelayBtn.TextSize = 14
+autofireDelayBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+autofireDelayBtn.Parent = autofireDelayFrame
+Instance.new("UICorner", autofireDelayBtn).CornerRadius = UDim.new(0, 8)
+
+autofireDelayBtn.MouseButton1Click:Connect(function()
+	local idx = 1
+	for i, v in ipairs(AUTOFIRE_DELAY_STEPS) do
+		if math.abs(v - autofireTriggerDelay) < 0.005 then idx = i break end
+	end
+	idx = (idx % #AUTOFIRE_DELAY_STEPS) + 1
+	autofireTriggerDelay = AUTOFIRE_DELAY_STEPS[idx]
+	autofireDelayBtn.Text = "Delay do Trigger: " .. string.format("%.2f", autofireTriggerDelay) .. "s"
+	autofireCandidateSince = 0
+	npcTriggerCandidateSince = 0
+end)
 
 -- NOVO: Terceira Pessoa
 local function nightThirdPersonStop()
@@ -16825,9 +17111,7 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		shouldActivate = true
 	elseif aimbotBindString == "MouseMiddle" and input.UserInputType == Enum.UserInputType.MouseButton3 then
 		shouldActivate = true
-	elseif aimbotBindString == "MouseButton4" and input.UserInputType == Enum.UserInputType.MouseButton4 then
-		shouldActivate = true
-	elseif aimbotBindString == "MouseButton5" and input.UserInputType == Enum.UserInputType.MouseButton5 then
+	elseif sideMouseMatches(aimbotBindString, getSideMouseButton(input)) then
 		shouldActivate = true
 	elseif input.KeyCode and input.KeyCode.Name == aimbotBindString then
 		shouldActivate = true
@@ -16848,9 +17132,7 @@ UserInputService.InputEnded:Connect(function(input, processed)
 		shouldDeactivate = true
 	elseif aimbotBindString == "MouseMiddle" and input.UserInputType == Enum.UserInputType.MouseButton3 then
 		shouldDeactivate = true
-	elseif aimbotBindString == "MouseButton4" and input.UserInputType == Enum.UserInputType.MouseButton4 then
-		shouldDeactivate = true
-	elseif aimbotBindString == "MouseButton5" and input.UserInputType == Enum.UserInputType.MouseButton5 then
+	elseif sideMouseMatches(aimbotBindString, getSideMouseButton(input)) then
 		shouldDeactivate = true
 	elseif input.KeyCode and input.KeyCode.Name == aimbotBindString then
 		shouldDeactivate = true
@@ -16874,9 +17156,7 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		shouldActivate = true
 	elseif npcAimbotBindString == "MouseMiddle" and input.UserInputType == Enum.UserInputType.MouseButton3 then
 		shouldActivate = true
-	elseif npcAimbotBindString == "MouseButton4" and input.UserInputType == Enum.UserInputType.MouseButton4 then
-		shouldActivate = true
-	elseif npcAimbotBindString == "MouseButton5" and input.UserInputType == Enum.UserInputType.MouseButton5 then
+	elseif sideMouseMatches(npcAimbotBindString, getSideMouseButton(input)) then
 		shouldActivate = true
 	elseif input.KeyCode and input.KeyCode.Name == npcAimbotBindString then
 		shouldActivate = true
@@ -16898,9 +17178,7 @@ UserInputService.InputEnded:Connect(function(input, processed)
 		shouldDeactivate = true
 	elseif npcAimbotBindString == "MouseMiddle" and input.UserInputType == Enum.UserInputType.MouseButton3 then
 		shouldDeactivate = true
-	elseif npcAimbotBindString == "MouseButton4" and input.UserInputType == Enum.UserInputType.MouseButton4 then
-		shouldDeactivate = true
-	elseif npcAimbotBindString == "MouseButton5" and input.UserInputType == Enum.UserInputType.MouseButton5 then
+	elseif sideMouseMatches(npcAimbotBindString, getSideMouseButton(input)) then
 		shouldDeactivate = true
 	elseif input.KeyCode and input.KeyCode.Name == npcAimbotBindString then
 		shouldDeactivate = true
@@ -16926,7 +17204,7 @@ NM_VALUE_KEYS = {
 	"speedBoostValue", "jumpPowerBoostValue", "freecamSpeed", "chatSpammerMessage", "chatSpammerInterval",
 	"autoclickerInterval", "autoclickerMode", "autoclickerButton", "autoclickerFixedX", "autoclickerFixedY",
 	"fastHitInterval", "radarRange", "stealDistanceValue", "stealTargetMode", "tpCursorCooldownSeconds",
-	"autoKillAttackSpeed", "autofireCooldown", "spinbotSpeed", "spinbotLookDown",
+	"autoKillAttackSpeed", "autofireCooldown", "autofireMode", "autofireMaxDistance", "autofireTriggerDelay", "spinbotSpeed", "spinbotLookDown",
 	"magnetDistance", "magnetRange", "hitboxSize", "npcHitboxSize", "npcTriggerCooldown",
 	"espColor", "espTracerColor", "espDistanceColor", "espNameColor", "skeletonColor", "weaponNameColor",
 	"npcEspColor", "npcEspNameColor", "npcEspDistanceColor", "npcEspTracerColor", "npcSkeletonColor", "npcWeaponNameColor",
@@ -16967,6 +17245,9 @@ NM_VARS = {
 	tpCursorCooldownSeconds = { get = function() return tpCursorCooldownSeconds end, set = function(v) tpCursorCooldownSeconds = v end },
 	autoKillAttackSpeed = { get = function() return autoKillAttackSpeed end, set = function(v) autoKillAttackSpeed = v end },
 	autofireCooldown = { get = function() return autofireCooldown end, set = function(v) autofireCooldown = v end },
+	autofireMode = { get = function() return autofireMode end, set = function(v) autofireMode = v end },
+	autofireMaxDistance = { get = function() return autofireMaxDistance end, set = function(v) autofireMaxDistance = v end },
+	autofireTriggerDelay = { get = function() return autofireTriggerDelay end, set = function(v) autofireTriggerDelay = v end },
 	spinbotSpeed = { get = function() return spinbotSpeed end, set = function(v) spinbotSpeed = v end },
 	spinbotLookDown = { get = function() return spinbotLookDown end, set = function(v) spinbotLookDown = v end },
 	magnetDistance = { get = function() return magnetDistance end, set = function(v) magnetDistance = v end },
@@ -17260,6 +17541,14 @@ function nmSyncLabels()
 		if npcEspDistLabel then npcEspDistLabel.Text = tostring(ESP_MAX_DISTANCE) end
 		if npcEspDistFill then npcEspDistFill.Size = UDim2.fromScale(math.clamp((ESP_MAX_DISTANCE - 50) / 450, 0, 1), 1) end
 		if modeBtn then modeBtn.Text = "Modo: " .. tostring(espMode) end
+		if autofireModeBtn then autofireModeBtn.Text = "Trigger: " .. tostring(autofireMode) end
+		if autofireRangeTitle then autofireRangeTitle.Text = "Alcance do Trigger: " .. tostring(autofireMaxDistance) end
+		if autofireRangeFill and type(autofireMaxDistance) == "number" then
+			autofireRangeFill.Size = UDim2.fromScale(math.clamp(autofireMaxDistance / 300, 0, 1), 1)
+		end
+		if autofireDelayBtn and type(autofireTriggerDelay) == "number" then
+			autofireDelayBtn.Text = "Delay do Trigger: " .. string.format("%.2f", autofireTriggerDelay) .. "s"
+		end
 		if npcModeBtn then npcModeBtn.Text = "Modo: " .. tostring(npcEspMode) end
 		if tracerModeBtn then tracerModeBtn.Text = "Modo Tracer: " .. tostring(tracerMode) end
 		if npcTracerModeBtn then npcTracerModeBtn.Text = "Modo Tracer: " .. tostring(npcTracerMode) end
@@ -17810,37 +18099,52 @@ RunService.RenderStepped:Connect(function()
 	-- NPC Triggerbot: dispara quando a mira esta sobre um NPC
 	if npcTriggerEnabled and not panelVisible then
 		local nowNpcTrigger = tick()
-		if nowNpcTrigger - npcEspLastScanTime >= npcEspScanInterval then
-			npcEspLastScanTime = nowNpcTrigger
-			npcEspCachedModels = getNPCsFromWorkspace()
-		end
+		-- Trigger apenas LE a cache do ESP (nunca escreve nela) para nao baguncar os visuais
 		if nowNpcTrigger - lastNpcTriggerShot >= npcTriggerCooldown then
 			local triggerCamera = workspace.CurrentCamera
 			local triggerChar = LocalPlayer.Character
 			if triggerCamera and triggerChar then
-				local rayParams = RaycastParams.new()
-				rayParams.FilterDescendantsInstances = {triggerChar, triggerCamera}
-				rayParams.FilterType = Enum.RaycastFilterType.Exclude
-				rayParams.IgnoreWater = true
-				local result = workspace:Raycast(triggerCamera.CFrame.Position, triggerCamera.CFrame.LookVector * 1000, rayParams)
+				local result = raycastSkipPenetrable(
+					triggerCamera.CFrame.Position,
+					triggerCamera.CFrame.LookVector,
+					1000,
+					{triggerChar, triggerCamera}
+				)
 				if result and result.Instance then
 					local hitPart = result.Instance
 					while hitPart do
-						local triggered = false
+						local triggeredModel = nil
 						for _, info in ipairs(npcEspCachedModels) do
 							if info.model == hitPart then
-								triggered = true
+								triggeredModel = info.model
 								break
 							end
 						end
-						if triggered then
-							fireAutofireShot()
-							lastNpcTriggerShot = nowNpcTrigger
+						if triggeredModel then
+							local npcRoot = getPrimaryPart(triggeredModel)
+							local myRootNow = getPrimaryPart(triggerChar)
+							local maxRange = getAutofireRange()
+							local inRange = not (npcRoot and myRootNow) or maxRange == math.huge
+								or (npcRoot.Position - myRootNow.Position).Magnitude <= maxRange
+							if inRange and crosshairOnModel(triggeredModel, 1000, true) then
+								if npcTriggerCandidateSince == 0 then npcTriggerCandidateSince = nowNpcTrigger end
+								if nowNpcTrigger - npcTriggerCandidateSince >= autofireTriggerDelay then
+									fireAutofireShot()
+									lastNpcTriggerShot = nowNpcTrigger
+									npcTriggerCandidateSince = 0
+								end
+							else
+								npcTriggerCandidateSince = 0
+							end
 							break
 						end
 						hitPart = hitPart.Parent
 					end
+				else
+					npcTriggerCandidateSince = 0
 				end
+			else
+				npcTriggerCandidateSince = 0
 			end
 		end
 	end
@@ -17939,7 +18243,8 @@ RunService.RenderStepped:Connect(function()
 		local now = tick()
 		if now - npcEspLastScanTime >= npcEspScanInterval then
 			npcEspLastScanTime = now
-			npcEspCachedModels = getNPCsFromWorkspace()
+			local scanned = getNPCsFromWorkspace()
+			if scanned then npcEspCachedModels = scanned end
 		end
 		local validNpcs = {}
 		for _, npcInfo in ipairs(npcEspCachedModels) do
