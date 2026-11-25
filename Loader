@@ -217,40 +217,47 @@ local keyStroke = Stroke(C.Border, 1, keyBox)
 keyStroke.Transparency = 0.3
 New("UIPadding", {PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 36)}, keyBox)
 
--- capa solida: esconde o texto real mesmo enquanto escreves
+-- Capa e textos sao IRMAOS do TextBox (filhos do card), por cima dele.
+-- Active=false deixa os cliques passarem para o TextBox.
+local keyVisible = false
+
 local keyCover = New("Frame", {
 	BackgroundColor3 = C.Input,
 	BorderSizePixel = 0,
-	Position = UDim2.new(0, 0, 0, 0),
-	Size = UDim2.new(1, -40, 1, 0),
-	ZIndex = 5,
-}, keyBox)
+	Position = UDim2.new(0, 18, 0, 84),
+	Size = UDim2.new(1, -36, 0, 34),
+	Active = false,
+	ZIndex = 4,
+}, card)
+Corner(8, keyCover)
 
 local hintLbl = New("TextLabel", {
 	BackgroundTransparency = 1,
-	Position = UDim2.new(0, 12, 0, 0),
-	Size = UDim2.new(1, -52, 1, 0),
+	Position = UDim2.new(0, 30, 0, 84),
+	Size = UDim2.new(1, -72, 0, 34),
 	Text = "Paste your key...",
 	TextSize = 12,
 	TextColor3 = C.Dim,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	TextYAlignment = Enum.TextYAlignment.Center,
-	ZIndex = 6,
+	Active = false,
+	ZIndex = 5,
 	Visible = true,
-}, keyBox)
+}, card)
 
 local maskLbl = New("TextLabel", {
 	BackgroundTransparency = 1,
-	Position = UDim2.new(0, 12, 0, 0),
-	Size = UDim2.new(1, -52, 1, 0),
+	Position = UDim2.new(0, 30, 0, 84),
+	Size = UDim2.new(1, -72, 0, 34),
 	Text = "",
 	TextSize = 13,
 	TextColor3 = C.Text,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	TextYAlignment = Enum.TextYAlignment.Center,
-	ZIndex = 6,
+	Active = false,
+	ZIndex = 5,
 	Visible = false,
-}, keyBox)
+}, card)
 
 local function refreshKeyOverlay()
 	local empty = tostring(keyBox.Text or "") == ""
@@ -267,18 +274,18 @@ end)
 -- olho no extremo direito, desenhado com GUI
 local eyeBtn = New("TextButton", {
 	BackgroundTransparency = 1,
-	Position = UDim2.new(1, -30, 0.5, -10),
+	Position = UDim2.new(1, -52, 0, 91),
 	Size = UDim2.new(0, 24, 0, 20),
 	Text = "",
 	AutoButtonColor = false,
-	ZIndex = 7,
-}, keyBox)
+	ZIndex = 6,
+}, card)
 local eyeShape = New("Frame", {
 	BackgroundColor3 = C.Input,
 	BorderSizePixel = 0,
 	Position = UDim2.new(0, 1, 0.5, -5),
 	Size = UDim2.new(0, 18, 0, 10),
-	ZIndex = 7,
+	ZIndex = 6,
 }, eyeBtn)
 Corner(5, eyeShape)
 local eyeOutline = Stroke(C.Dim, 1.5, eyeShape)
@@ -287,11 +294,10 @@ local eyeDot = New("Frame", {
 	BorderSizePixel = 0,
 	Position = UDim2.new(0.5, -3, 0.5, -3),
 	Size = UDim2.new(0, 6, 0, 6),
-	ZIndex = 8,
+	ZIndex = 7,
 }, eyeShape)
 Corner(3, eyeDot)
 
-local keyVisible = false
 eyeBtn.MouseButton1Click:Connect(function()
 	keyVisible = not keyVisible
 	refreshKeyOverlay()
