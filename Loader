@@ -227,7 +227,7 @@ local keyBox = New("TextBox", {
 	PlaceholderColor3 = C.Dim,
 	TextColor3 = C.Text,
 	TextSize = 13,
-	TextHidden = true,
+	TextTransparency = 1, -- texto real escondido; mostramos pontos por cima
 	ClearTextOnFocus = false,
 	ZIndex = 3,
 }, card)
@@ -235,6 +235,23 @@ Corner(8, keyBox)
 local keyStroke = Stroke(C.Border, 1, keyBox)
 keyStroke.Transparency = 0.3
 New("UIPadding", {PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 34)}, keyBox)
+
+-- mascara de pontos por cima do campo
+local maskLbl = New("TextLabel", {
+	BackgroundTransparency = 1,
+	Position = UDim2.new(0, 12, 0, 0),
+	Size = UDim2.new(1, -44, 1, 0),
+	Font = Enum.Font.GothamBold,
+	TextSize = 13,
+	TextColor3 = C.Text,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	TextYAlignment = Enum.TextYAlignment.Center,
+	Text = "",
+	ZIndex = 4,
+}, keyBox)
+keyBox:GetPropertyChangedSignal("Text"):Connect(function()
+	maskLbl.Text = string.rep("•", math.min(#tostring(keyBox.Text or ""), 22))
+end)
 
 -- botao de olho: mostra / esconde a key
 local eyeBtn = New("TextButton", {
@@ -247,10 +264,13 @@ local eyeBtn = New("TextButton", {
 	AutoButtonColor = false,
 	ZIndex = 4,
 }, keyBox)
+local keyVisible = false
 eyeBtn.MouseButton1Click:Connect(function()
-	keyBox.TextHidden = not keyBox.TextHidden
-	eyeBtn.Text = keyBox.TextHidden and "◉" or "◌"
-	eyeBtn.TextColor3 = keyBox.TextHidden and C.Dim or C.Purple
+	keyVisible = not keyVisible
+	keyBox.TextTransparency = keyVisible and 0 or 1
+	maskLbl.Visible = not keyVisible
+	eyeBtn.Text = keyVisible and "◌" or "◉"
+	eyeBtn.TextColor3 = keyVisible and C.Purple or C.Dim
 end)
 
 local checkBtn = New("TextButton", {
@@ -378,7 +398,7 @@ local backHwidBtn = New("TextButton", {
 Corner(7, backHwidBtn)
 
 local hwidWidgets = { hwidTitle, hwidBig, hwidHint, copyHwidBtn, backHwidBtn }
-local keyWidgets = { subtitle, keyBox, checkBtn, getBtn, keyTag, statusLbl, eyeBtn }
+local keyWidgets = { subtitle, keyBox, checkBtn, getBtn, keyTag, statusLbl, eyeBtn, maskLbl }
 local currentHwid = nil
 
 -- =========================================================
