@@ -1,1 +1,640 @@
+--[[
+	Night Loader - Tela de KEY + Loading para o Night Menu
+	---------------------------------------------------------------
+	Key system por ficheiro raw (GitHub) + log de tentativas por
+	webhook do Discord. Depois carrega o Night Menu por HttpGet.
+]]
 
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local CoreGui = game:GetService("CoreGui")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+
+-- =========================================================
+-- CONFIG (edita aqui)
+-- =========================================================
+local SCRIPT_URL = "https://raw.githubusercontent.com/rodrisoares03/rodri_hack/refs/heads/main/backup"
+local API_URL = "https://night-menu-key.phanomcloud.online/validate"
+local LOAD_TIME = 2.8
+
+local HttpService = game:GetService("HttpService")
+
+-- Cores (mesma paleta Astrix Dark do Night Menu)
+local C = {
+	Bg      = Color3.fromRGB(15, 15, 20),
+	Card    = Color3.fromRGB(26, 27, 32),
+	Input   = Color3.fromRGB(43, 44, 52),
+	Accent  = Color3.fromRGB(255, 145, 25),
+	Accent2 = Color3.fromRGB(140, 90, 255),
+	Text    = Color3.fromRGB(255, 255, 255),
+	Dim     = Color3.fromRGB(170, 172, 185),
+	Border  = Color3.fromRGB(74, 75, 88),
+}
+
+-- =========================================================
+-- HELPERS
+-- =========================================================
+local function New(cls, props, parent)
+	local o = Instance.new(cls)
+	for k, v in pairs(props or {}) do o[k] = v end
+	if parent then o.Parent = parent end
+	if o:IsA("TextLabel") or o:IsA("TextButton") or o:IsA("TextBox") then
+		o.Font = Enum.Font.GothamBold
+	end
+	return o
+end
+local function Corner(r, p) return New("UICorner", {CornerRadius = UDim.new(0, r)}, p) end
+local function Stroke(col, th, p) return New("UIStroke", {Color = col or C.Border, Thickness = th or 1}, p) end
+local function Tween(obj, props, t, style, dir)
+	local info = TweenInfo.new(t or 0.18, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out)
+	pcall(function() TweenService:Create(obj, info, props):Play() end)
+end
+
+-- Pedido HTTP (executor request / syn / fluxus / fallback)
+local function getHWID()
+	local hwid = "unknown"
+	pcall(function()
+		local analytics = game:GetService("RbxAnalyticsService")
+		hwid = analytics:GetClientId()
+	end)
+	return hwid
+end
+
+-- Validacao contra a API do bot (base de dados real, keys nao publicas)
+local function validateKeyWithApi(key)
+	local hwid = getHWID()
+	local okHttp, response = pcall(game.HttpGet, game,
+		API_URL .. "?key=" .. HttpService:UrlEncode(key) .. "&hwid=" .. HttpService:UrlEncode(hwid))
+	if not okHttp or not response or response == "" then
+		return false, "Sem ligacao ao servidor de keys.", nil
+	end
+	local okDecode, data = pcall(function() return HttpService:JSONDecode(response) end)
+	if not okDecode or type(data) ~= "table" then
+		return false, "Resposta invalida do servidor.", nil
+	end
+	if data.ok == true then
+		return true, data.message or "Key aceite", data
+	end
+	local reasons = {
+		invalid = "Key invalida.",
+		revoked = "Key revogada.",
+		expired = "Key expirada.",
+		hwid = "Key vinculada a outro dispositivo.",
+	}
+	return false, reasons[data.reason] or data.message or "Key recusada.", data
+end
+
+-- =========================================================
+-- GUI
+-- =========================================================
+local gui = New("ScreenGui", {
+	Name = "NightLoader",
+	ResetOnSpawn = false,
+	IgnoreGuiInset = true,
+	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+})
+local okCore = pcall(function() gui.Parent = CoreGui end)
+if not okCore then gui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+
+local overlay = New("Frame", {
+	BackgroundColor3 = Color3.fromRGB(8, 8, 12),
+	BackgroundTransparency = 0.35,
+	BorderSizePixel = 0,
+	Size = UDim2.new(1, 0, 1, 0),
+}, gui)
+
+local card = New("Frame", {
+	BackgroundColor3 = C.Card,
+	BorderSizePixel = 0,
+	Position = UDim2.new(0.5, -170, 0.5, -135),
+	Size = UDim2.new(0, 340, 0, 270),
+	ZIndex = 2,
+}, overlay)
+Corner(14, card)
+local cardStroke = Stroke(C.Border, 1, card)
+cardStroke.Transparency = 0.3
+
+-- Arrastar o loader pelo topo (compativel com mouse e toque)
+local dragBar = New("Frame", {
+	BackgroundTransparency = 1,
+	Position = UDim2.new(0, 0, 0, 0),
+	Size = UDim2.new(1, -40, 0, 42),
+	Active = true,
+	ZIndex = 4,
+}, card)
+local dragging = false
+local dragStartPos = nil
+local cardStartPos = nil
+dragBar.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+		dragging = true
+		dragStartPos = input.Position
+		cardStartPos = card.Position
+	end
+end)
+UserInputService.InputChanged:Connect(function(input)
+	if not dragging or not dragStartPos or not cardStartPos then return end
+	if input.UserInputType ~= Enum.UserInputType.MouseMovement
+		and input.UserInputType ~= Enum.UserInputType.Touch then return end
+	local delta = input.Position - dragStartPos
+	card.Position = UDim2.new(
+		cardStartPos.X.Scale, cardStartPos.X.Offset + delta.X,
+		cardStartPos.Y.Scale, cardStartPos.Y.Offset + delta.Y
+	)
+end)
+UserInputService.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+		dragging = false
+	end
+end)
+
+-- icon (imagem do Roblox)
+local ICON_ID = "114566700916767"
+local icon = New("ImageLabel", {
+	Image = "rbxassetid://" .. ICON_ID,
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+	Position = UDim2.new(0, 16, 0, 12),
+	Size = UDim2.new(0, 36, 0, 36),
+	ZIndex = 3,
+}, card)
+Corner(9, icon)
+Stroke(C.Border, 1, icon).Transparency = 0.35
+
+local title = New("TextLabel", {
+	BackgroundTransparency = 1,
+	Position = UDim2.new(0, 62, 0, 16),
+	Size = UDim2.new(1, -96, 0, 28),
+	Font = Enum.Font.GothamBlack,
+	TextSize = 18,
+	TextColor3 = C.Text,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	Text = "Night Loader",
+	ZIndex = 3,
+}, card)
+
+local closeBtn = New("TextButton", {
+	BackgroundTransparency = 1,
+	Position = UDim2.new(1, -32, 0, 14),
+	Size = UDim2.new(0, 24, 0, 24),
+	Text = "x",
+	TextSize = 16,
+	TextColor3 = C.Dim,
+	AutoButtonColor = false,
+	ZIndex = 3,
+}, card)
+closeBtn.MouseButton1Click:Connect(function() gui:Destroy() end)
+
+local subtitle = New("TextLabel", {
+	BackgroundTransparency = 1,
+	Position = UDim2.new(0, 18, 0, 58),
+	Size = UDim2.new(1, -36, 0, 20),
+	TextSize = 12,
+	TextColor3 = C.Dim,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	Text = "Coloca a merda da Key",
+	ZIndex = 3,
+}, card)
+
+local keyBox = New("TextBox", {
+	BackgroundColor3 = C.Input,
+	BorderSizePixel = 0,
+	Position = UDim2.new(0, 18, 0, 84),
+	Size = UDim2.new(1, -36, 0, 34),
+	Text = "",
+	PlaceholderText = "Paste your key...",
+	PlaceholderColor3 = C.Dim,
+	TextColor3 = C.Text,
+	TextSize = 13,
+	ClearTextOnFocus = false,
+	ZIndex = 3,
+}, card)
+Corner(8, keyBox)
+local keyStroke = Stroke(C.Border, 1, keyBox)
+keyStroke.Transparency = 0.3
+New("UIPadding", {PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 36)}, keyBox)
+
+-- O proprio TextBox mostra os pontos; a key real fica em realKey.
+local realKey = ""
+local keyVisible = false
+local updating = false
+
+local function dots(n) return string.rep("•", math.min(n, 22)) end
+
+keyBox:GetPropertyChangedSignal("Text"):Connect(function()
+	if updating then return end
+	local shown = tostring(keyBox.Text or "")
+	if keyVisible then
+		realKey = shown
+		return
+	end
+	-- modo oculto: o texto atual e sempre pontos
+	local current = #realKey
+	if #shown > current then
+		local inserted = shown:sub(current + 1):gsub("•", "")
+		realKey = realKey .. inserted
+	elseif #shown < current then
+		realKey = realKey:sub(1, #shown)
+	end
+	updating = true
+	keyBox.Text = dots(#realKey)
+	updating = false
+end)
+
+-- olho no extremo direito
+local eyeBtn = New("TextButton", {
+	BackgroundTransparency = 1,
+	Position = UDim2.new(1, -52, 0, 91),
+	Size = UDim2.new(0, 24, 0, 20),
+	Text = "",
+	AutoButtonColor = false,
+	ZIndex = 6,
+}, card)
+local eyeShape = New("Frame", {
+	BackgroundColor3 = C.Input,
+	BorderSizePixel = 0,
+	Position = UDim2.new(0, 1, 0.5, -5),
+	Size = UDim2.new(0, 18, 0, 10),
+	ZIndex = 6,
+}, eyeBtn)
+Corner(5, eyeShape)
+local eyeOutline = Stroke(C.Dim, 1.5, eyeShape)
+local eyeDot = New("Frame", {
+	BackgroundColor3 = C.Dim,
+	BorderSizePixel = 0,
+	Position = UDim2.new(0.5, -3, 0.5, -3),
+	Size = UDim2.new(0, 6, 0, 6),
+	ZIndex = 7,
+}, eyeShape)
+Corner(3, eyeDot)
+
+eyeBtn.MouseButton1Click:Connect(function()
+	keyVisible = not keyVisible
+	updating = true
+	keyBox.Text = keyVisible and realKey or dots(#realKey)
+	updating = false
+	eyeOutline.Color = keyVisible and C.Purple or C.Dim
+	eyeDot.BackgroundColor3 = keyVisible and C.Purple or C.Dim
+end)
+
+local checkBtn = New("TextButton", {
+	BackgroundColor3 = C.Accent,
+	BorderSizePixel = 0,
+	Position = UDim2.new(0, 18, 0, 128),
+	Size = UDim2.new(1, -36, 0, 36),
+	Text = "Check key",
+	TextColor3 = C.Text,
+	TextSize = 13,
+	AutoButtonColor = false,
+	ZIndex = 3,
+}, card)
+Corner(7, checkBtn)
+
+local getBtn = New("TextButton", {
+	BackgroundColor3 = C.Input,
+	BorderSizePixel = 0,
+	Position = UDim2.new(0, 18, 0, 174),
+	Size = UDim2.new(1, -36, 0, 32),
+	Text = "Get key",
+	TextColor3 = C.Text,
+	TextSize = 12,
+	AutoButtonColor = false,
+	ZIndex = 3,
+}, card)
+Corner(7, getBtn)
+local getStroke = Stroke(C.Border, 1, getBtn)
+getStroke.Transparency = 0.3
+
+local keyTag = New("TextLabel", {
+	BackgroundTransparency = 1,
+	Position = UDim2.new(0, 18, 0, 218),
+	Size = UDim2.new(1, -36, 0, 16),
+	Text = "KEY",
+	TextSize = 10,
+	TextColor3 = C.Dim,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	ZIndex = 3,
+}, card)
+
+local statusLbl = New("TextLabel", {
+	BackgroundTransparency = 1,
+	Position = UDim2.new(0, 18, 0, 234),
+	Size = UDim2.new(1, -36, 0, 32),
+	Text = "",
+	TextSize = 10,
+	TextColor3 = C.Accent,
+	TextWrapped = true,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	TextYAlignment = Enum.TextYAlignment.Top,
+	ZIndex = 3,
+	Visible = false,
+}, card)
+
+-- ===== PASSO 1: HWID em destaque (so para gerar / associar key) =====
+local hwidTitle = New("TextLabel", {
+	BackgroundTransparency = 1,
+	Position = UDim2.new(0, 18, 0, 58),
+	Size = UDim2.new(1, -36, 0, 24),
+	Text = "1. O teu HWID",
+	TextSize = 16,
+	TextColor3 = C.Text,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	ZIndex = 4,
+	Visible = false,
+}, card)
+
+local hwidBig = New("TextLabel", {
+	BackgroundColor3 = C.Input,
+	BorderSizePixel = 0,
+	Position = UDim2.new(0, 18, 0, 88),
+	Size = UDim2.new(1, -36, 0, 60),
+	Text = "",
+	TextSize = 18,
+	TextColor3 = C.Accent,
+	TextWrapped = true,
+	TextXAlignment = Enum.TextXAlignment.Center,
+	TextYAlignment = Enum.TextYAlignment.Center,
+	ZIndex = 4,
+	Visible = false,
+}, card)
+Corner(8, hwidBig)
+Stroke(C.Divider, 1, hwidBig).Transparency = 0.3
+
+local hwidHint = New("TextLabel", {
+	BackgroundTransparency = 1,
+	Position = UDim2.new(0, 18, 0, 156),
+	Size = UDim2.new(1, -36, 0, 32),
+	Text = "Envia este codigo ao dono do servidor para ele gerar a key associada.",
+	TextSize = 11,
+	TextColor3 = C.Dim,
+	TextWrapped = true,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	ZIndex = 4,
+	Visible = false,
+}, card)
+
+local copyHwidBtn = New("TextButton", {
+	BackgroundColor3 = C.Accent,
+	BorderSizePixel = 0,
+	Position = UDim2.new(0, 18, 0, 190),
+	Size = UDim2.new(1, -36, 0, 34),
+	Text = "Copiar HWID",
+	TextSize = 13,
+	TextColor3 = C.Text,
+	AutoButtonColor = false,
+	ZIndex = 4,
+	Visible = false,
+}, card)
+Corner(7, copyHwidBtn)
+
+local backHwidBtn = New("TextButton", {
+	BackgroundColor3 = C.Input,
+	BorderSizePixel = 0,
+	Position = UDim2.new(0, 18, 0, 230),
+	Size = UDim2.new(1, -36, 0, 30),
+	Text = "Voltar",
+	TextSize = 12,
+	TextColor3 = C.Text,
+	AutoButtonColor = false,
+	ZIndex = 4,
+	Visible = false,
+}, card)
+Corner(7, backHwidBtn)
+
+local hwidWidgets = { hwidTitle, hwidBig, hwidHint, copyHwidBtn, backHwidBtn }
+local keyWidgets = { subtitle, keyBox, checkBtn, getBtn, keyTag, statusLbl, eyeBtn }
+local currentHwid = nil
+
+-- =========================================================
+-- KEY
+-- =========================================================
+local function setStatus(text, color)
+	statusLbl.Visible = true
+	statusLbl.Text = text
+	statusLbl.TextColor3 = color or C.Accent
+end
+
+local function showHwidStep()
+	currentHwid = getHWID()
+	hwidBig.Text = currentHwid
+	for _, w in ipairs(keyWidgets) do if w then w.Visible = false end end
+	for _, w in ipairs(hwidWidgets) do if w then w.Visible = true end end
+end
+
+local function showKeyStep()
+	for _, w in ipairs(hwidWidgets) do if w then w.Visible = false end end
+	for _, w in ipairs(keyWidgets) do if w then w.Visible = true end end
+	statusLbl.Visible = false
+end
+
+copyHwidBtn.MouseButton1Click:Connect(function()
+	pcall(function() if setclipboard then setclipboard(currentHwid or "") end end)
+	copyHwidBtn.Text = "Copiado!"
+	task.delay(1.2, function() copyHwidBtn.Text = "Copiar HWID" end)
+end)
+backHwidBtn.MouseButton1Click:Connect(function() showKeyStep() end)
+
+local loading = false
+
+local function showLoadingScreen()
+	loading = true
+	-- limpa cartao do key
+	for _, obj in ipairs(card:GetChildren()) do
+		if obj:IsA("TextBox") or obj:IsA("TextButton") or obj:IsA("TextLabel") then
+			obj.Visible = false
+		end
+	end
+
+	local bigIcon = New("ImageLabel", {
+		Image = "rbxassetid://" .. ICON_ID,
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Position = UDim2.new(0.5, -30, 0, 68),
+		Size = UDim2.new(0, 60, 0, 60),
+		ZIndex = 4,
+	}, card)
+	Corner(14, bigIcon)
+	Stroke(C.Border, 1, bigIcon).Transparency = 0.35
+
+	local lTitle = New("TextLabel", {
+		BackgroundTransparency = 1,
+		Position = UDim2.new(0, 20, 0, 138),
+		Size = UDim2.new(1, -40, 0, 24),
+		Text = "Loading script",
+		TextSize = 16,
+		TextColor3 = C.Text,
+		ZIndex = 4,
+	}, card)
+
+	local lSub = New("TextLabel", {
+		BackgroundTransparency = 1,
+		Position = UDim2.new(0, 20, 0, 164),
+		Size = UDim2.new(1, -40, 0, 16),
+		Text = "Getting things ready...",
+		TextSize = 11,
+		TextColor3 = C.Dim,
+		ZIndex = 4,
+	}, card)
+
+	local barBg = New("Frame", {
+		BackgroundColor3 = C.Input,
+		BorderSizePixel = 0,
+		Position = UDim2.new(0, 20, 0, 194),
+		Size = UDim2.new(1, -40, 0, 10),
+		ZIndex = 4,
+	}, card)
+	Corner(4, barBg)
+	local barFill = New("Frame", {
+		BackgroundColor3 = C.Accent,
+		BorderSizePixel = 0,
+		Size = UDim2.new(0, 0, 1, 0),
+		ZIndex = 5,
+	}, barBg)
+	Corner(4, barFill)
+
+	local lStatus = New("TextLabel", {
+		BackgroundTransparency = 1,
+		Position = UDim2.new(0, 20, 0, 216),
+		Size = UDim2.new(1, -40, 0, 16),
+		Text = "Loading",
+		TextSize = 10,
+		TextColor3 = C.Dim,
+		ZIndex = 4,
+	}, card)
+
+	local loadingWidgets = { bigIcon, lTitle, lSub, barBg, lStatus }
+
+	Tween(barFill, {Size = UDim2.new(1, 0, 1, 0)}, LOAD_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
+	Tween(bigIcon, {Rotation = 360}, LOAD_TIME, Enum.EasingStyle.Linear)
+
+	task.delay(LOAD_TIME + 0.25, function()
+		lStatus.Text = "Starting Night Menu..."
+		task.wait(0.25)
+
+		-- Carrega o Night Menu pelo URL
+		local loaderErr = nil
+		pcall(function()
+			local loader = loadstring or load
+			local okHttp, src = pcall(game.HttpGet, game, SCRIPT_URL)
+			if not okHttp or not src or src == "" or not loader then
+				loaderErr = "Falha ao carregar o menu: " .. tostring(src)
+				return
+			end
+			local fn, compileErr = loader(src)
+			if not fn then
+				loaderErr = "Erro ao compilar menu: " .. tostring(compileErr)
+				return
+			end
+			local okRun, runErr = pcall(fn)
+			if not okRun then loaderErr = tostring(runErr) end
+		end)
+
+		-- Confirma que o menu realmente abriu (key aceite) antes de fechar o loader
+		local confirmed = false
+		for _ = 1, 80 do
+			task.wait(0.15)
+			local okCheck, found = pcall(function()
+				local cg = game:GetService("CoreGui")
+				if cg:FindFirstChild("NightModMenu") then return true end
+				local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+				if pg and pg:FindFirstChild("NightModMenu") then return true end
+				for _, obj in ipairs(cg:GetChildren()) do
+					if obj:IsA("ScreenGui") and obj ~= gui and tostring(obj.Name):find("Night") then return true end
+				end
+				if _G.nightMenuUnloaded == false then return true end
+				return false
+			end)
+			if okCheck and found then
+				confirmed = true
+				break
+			end
+		end
+
+		if confirmed then
+			pcall(function() gui:Destroy() end)
+		else
+			-- Key recusada: volta ao painel de key para tentar de novo
+			for _, w in ipairs(loadingWidgets) do
+				if w and w.Parent then w.Visible = false end
+			end
+			for _, obj in ipairs(card:GetChildren()) do
+				if obj:IsA("TextBox") or obj:IsA("TextButton") or obj:IsA("TextLabel") then
+					local shouldHide = false
+					for _, w in ipairs(loadingWidgets) do
+						if w == obj then shouldHide = true break end
+					end
+					for _, w in ipairs(hwidWidgets) do
+						if w == obj then shouldHide = true break end
+					end
+					if not shouldHide then obj.Visible = true end
+				end
+			end
+			loading = false
+			if loaderErr then
+				setStatus(loaderErr:sub(1, 70), Color3.fromRGB(255, 120, 120))
+			else
+				setStatus("Nao foi possivel abrir o menu. Ve o F9.", Color3.fromRGB(255, 120, 120))
+			end
+		end
+	end)
+end
+
+checkBtn.MouseButton1Click:Connect(function()
+	if loading then return end
+	local key = tostring(realKey):match("^%s*(.-)%s*$")
+	if key == "" then
+		setStatus("Escreve a key primeiro.", Color3.fromRGB(255, 120, 120))
+		return
+	end
+
+	setStatus("A validar key...", C.Dim)
+	local accepted, message = validateKeyWithApi(key)
+	if not accepted then
+		setStatus(message, Color3.fromRGB(255, 120, 120))
+		Tween(keyBox, {BackgroundColor3 = Color3.fromRGB(90, 40, 45)}, 0.12)
+		task.wait(0.18)
+		Tween(keyBox, {BackgroundColor3 = C.Input}, 0.12)
+		return
+	end
+
+	setStatus("Key correta!", Color3.fromRGB(120, 255, 150))
+	pcall(function()
+		if writefile then writefile("night_loader_key.txt", key) end
+	end)
+	task.wait(0.35)
+	showLoadingScreen()
+end)
+
+getBtn.MouseButton1Click:Connect(function()
+	if loading then return end
+	showHwidStep()
+end)
+
+keyBox:GetPropertyChangedSignal("Text"):Connect(function()
+	if statusLbl.Visible and statusLbl.TextColor3 == Color3.fromRGB(255, 120, 120) then
+		statusLbl.Visible = false
+	end
+end)
+
+-- key guardada
+pcall(function()
+	if readfile and isfile and isfile("night_loader_key.txt") then
+		local saved = readfile("night_loader_key.txt")
+		if saved and saved ~= "" then
+			realKey = saved
+			keyVisible = false
+			updating = true
+			keyBox.Text = dots(#realKey)
+			updating = false
+		end
+	end
+end)
+
+-- fade in
+card.BackgroundTransparency = 1
+Tween(card, {BackgroundTransparency = 0}, 0.3)
+
+return nil
