@@ -5677,6 +5677,22 @@ if oldGui then
 	oldGui:Destroy()
 end
 
+-- Remover restos do Night Hub (Dungeon Quest) de execuções anteriores
+pcall(function()
+	for _, name in ipairs({ "NightHub", "NightHub_HUD" }) do
+		local inCore = CoreGui:FindFirstChild(name)
+		if inCore then inCore:Destroy() end
+		local inPlayer = playerGui:FindFirstChild(name)
+		if inPlayer then inPlayer:Destroy() end
+	end
+	for key, value in pairs(_G) do
+		if type(key) == "string" and key:find("NightHub_v2_", 1, true)
+			and type(value) == "table" and type(value.Cleanup) == "function" then
+			pcall(value.Cleanup)
+		end
+	end
+end)
+
 gui = Instance.new("ScreenGui")
 gui.Name = "NightModMenu"
 gui.ResetOnSpawn = false
@@ -20262,15 +20278,8 @@ function setupAutoExecute()
 end
 
 function toggleAutoExecute()
-	autoExecuteEnabled = not autoExecuteEnabled
+	applyAutoExecChoice(not autoExecuteEnabled)
 	saveLibrarySettings()
-	if autoExecuteEnabled then
-		setupAutoExecute()
-		showMenuToast("Auto Execute", "Enabled for autoexec and teleport queue", Color3.fromRGB(170, 255, 170))
-	else
-		showMenuToast("Auto Execute", "Disabled", Color3.fromRGB(255, 170, 170))
-	end
-	updateThemeStatus()
 end
 
 themeCategory = createCategory(themePage, "Theme")
@@ -20452,6 +20461,151 @@ nmMakeButton(configInfoCard, "Unload", 0, 662, 1, function()
 	unloadNightMenu()
 end)
 
+-- Pergunta (uma vez) se o utilizador quer ativar o auto-execute.
+-- Só usa a funcao ja existente setupAutoExecute().
+local AUTOEXEC_CHOICE_FILE = "night_autoexec_choice.txt"
+
+local function readAutoExecChoice()
+	if type(readfile) ~= "function" or type(isfile) ~= "function" then return nil end
+	local ok, exists = pcall(isfile, AUTOEXEC_CHOICE_FILE)
+	if not ok or not exists then return nil end
+	local ok2, content = pcall(readfile, AUTOEXEC_CHOICE_FILE)
+	if not ok2 or not content then return nil end
+	local value = tostring(content):match("^%s*(.-)%s*$")
+	if value == "yes" then return true end
+	if value == "no" then return false end
+	return nil
+end
+
+local function writeAutoExecChoice(enabled)
+	if type(writefile) ~= "function" then return end
+	pcall(function() writefile(AUTOEXEC_CHOICE_FILE, enabled and "yes" or "no") end)
+end
+
+function applyAutoExecChoice(enabled)
+	autoExecuteEnabled = enabled and true or false
+	writeAutoExecChoice(autoExecuteEnabled)
+	if autoExecuteEnabled then
+		pcall(setupAutoExecute)
+		showMenuToast("Auto Execute", "Ativado | o menu abrira sozinho no proximo jogo.", Color3.fromRGB(170, 255, 170))
+	else
+		showMenuToast("Auto Execute", "Desativado", Color3.fromRGB(255, 170, 170))
+	end
+	pcall(updateThemeStatus)
+end
+
+local function showAutoExecPrompt()
+	local promptGui = New("ScreenGui", {
+		Name = "NightAutoExecPrompt",
+		ResetOnSpawn = false,
+		IgnoreGuiInset = true,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	})
+	local parented = pcall(function() promptGui.Parent = CoreGui end)
+	if not parented then promptGui.Parent = playerGui end
+
+	local dim = New("Frame", {
+		BackgroundColor3 = Color3.fromRGB(8, 8, 12),
+		BackgroundTransparency = 0.45,
+		BorderSizePixel = 0,
+		Size = UDim2.new(1, 0, 1, 0),
+	}, promptGui)
+
+	local card = New("Frame", {
+		BackgroundColor3 = C.BgCard,
+		BorderSizePixel = 0,
+		Position = UDim2.new(0.5, -190, 0.5, -95),
+		Size = UDim2.new(0, 380, 0, 190),
+		ZIndex = 5,
+	}, dim)
+	Corner(12, card)
+	local strokePrompt = Stroke(C.Divider, 1, card)
+	strokePrompt.Transparency = 0.25
+
+	New("TextLabel", {
+		BackgroundTransparency = 1,
+		Position = UDim2.new(0, 18, 0, 16),
+		Size = UDim2.new(1, -36, 0, 24),
+		Font = Enum.Font.GothamBlack,
+		TextSize = 17,
+		TextColor3 = C.TxtWhite,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Text = "Auto Execute",
+		ZIndex = 6,
+	}, card)
+
+	New("TextLabel", {
+		BackgroundTransparency = 1,
+		Position = UDim2.new(0, 18, 0, 46),
+		Size = UDim2.new(1, -36, 0, 40),
+		Font = Enum.Font.Gotham,
+		TextSize = 12,
+		TextColor3 = C.TxtDim,
+		TextWrapped = true,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Text = "Queres que o Night Menu abra automaticamente quando entrares noutra experiencia?",
+		ZIndex = 6,
+	}, card)
+
+	local yesBtn = New("TextButton", {
+		BackgroundColor3 = C.Purple,
+		BorderSizePixel = 0,
+		Position = UDim2.new(0, 18, 0, 100),
+		Size = UDim2.new(0.5, -24, 0, 34),
+		Font = Enum.Font.GothamBold,
+		TextSize = 13,
+		TextColor3 = C.TxtWhite,
+		Text = "Sim, ativar",
+		AutoButtonColor = false,
+		ZIndex = 6,
+	}, card)
+	Corner(8, yesBtn)
+
+	local noBtn = New("TextButton", {
+		BackgroundColor3 = C.BgInput,
+		BorderSizePixel = 0,
+		Position = UDim2.new(0.5, 6, 0, 100),
+		Size = UDim2.new(0.5, -24, 0, 34),
+		Font = Enum.Font.GothamBold,
+		TextSize = 13,
+		TextColor3 = C.TxtWhite,
+		Text = "Nao",
+		AutoButtonColor = false,
+		ZIndex = 6,
+	}, card)
+	Corner(8, noBtn)
+	Stroke(C.Divider, 1, noBtn).Transparency = 0.3
+
+	New("TextLabel", {
+		BackgroundTransparency = 1,
+		Position = UDim2.new(0, 18, 0, 150),
+		Size = UDim2.new(1, -36, 0, 18),
+		Font = Enum.Font.Gotham,
+		TextSize = 10,
+		TextColor3 = C.TxtDim,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Text = "Podes mudar depois na aba Theme.",
+		ZIndex = 6,
+	}, card)
+
+	local function close(enabled)
+		pcall(function() promptGui:Destroy() end)
+		applyAutoExecChoice(enabled)
+	end
+	yesBtn.MouseButton1Click:Connect(function() close(true) end)
+	noBtn.MouseButton1Click:Connect(function() close(false) end)
+end
+
+local function handleAutoExecOnStart()
+	local choice = readAutoExecChoice()
+	if choice == nil then
+		task.defer(showAutoExecPrompt)
+		return
+	end
+	autoExecuteEnabled = choice
+	if choice then pcall(setupAutoExecute) end
+end
+
 function applyStoredMenuSettings()
 	local store = nmReadStore()
 	local settings = store.ui or {}
@@ -20492,7 +20646,7 @@ function applyStoredMenuSettings()
 	end)
 	suppressThemeFeedback = false
 	pcall(updateThemeStatus)
-	if autoExecuteEnabled then pcall(setupAutoExecute) end
+	pcall(handleAutoExecOnStart)
 end
 
 
