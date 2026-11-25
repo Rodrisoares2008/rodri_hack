@@ -6810,13 +6810,19 @@ mainFrame = New("Frame", {
 	Position = UDim2.new(0.5, -480, 0.5, -300),
 	Size = UDim2.new(0, 960, 0, 600),
 	ClipsDescendants = true,
-	Visible = true,
+	Visible = false, -- so aparece depois da escolha do auto-execute
 	Active = true, -- consome cliques sobre o menu (evita clicar através na UI do jogo)
 	ZIndex = 10000001,
 }, gui)
 Corner(12, mainFrame)
 mainStroke = Stroke(Color3.fromRGB(40, 40, 50), 1, mainFrame)
 mainStroke.Transparency = 0.5
+
+-- Mostra a interface real do menu (chamado apos a decisao do auto-execute)
+function revealNightMenu()
+	if mainFrame then mainFrame.Visible = true end
+	panelVisible = true
+end
 
 
 
@@ -8378,9 +8384,9 @@ createTab("THEME", "Theme", "", 153)
 
 setTab("UPDATES")
 
--- Garantir que o menu abra ao carregar (evita tela preta / "não abre")
-panelVisible = true
-mainFrame.Visible = true
+-- O menu so e revelado depois da escolha do auto-execute (verify revealNightMenu)
+panelVisible = false
+mainFrame.Visible = false
 
 -- ========= ANTI CLICK-THROUGH =========
 -- Cliques/taps que caiam sobre o menu são absorvidos e nunca chegam ao jogo.
@@ -20591,19 +20597,15 @@ local function showAutoExecPrompt()
 	local function close(enabled)
 		pcall(function() promptGui:Destroy() end)
 		applyAutoExecChoice(enabled)
+		pcall(revealNightMenu)
 	end
 	yesBtn.MouseButton1Click:Connect(function() close(true) end)
 	noBtn.MouseButton1Click:Connect(function() close(false) end)
 end
 
 local function handleAutoExecOnStart()
-	local choice = readAutoExecChoice()
-	if choice == nil then
-		task.defer(showAutoExecPrompt)
-		return
-	end
-	autoExecuteEnabled = choice
-	if choice then pcall(setupAutoExecute) end
+	-- Sempre perguntar, mesmo que ja tenha respondido antes
+	task.defer(showAutoExecPrompt)
 end
 
 function applyStoredMenuSettings()
