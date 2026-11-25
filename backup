@@ -5859,7 +5859,7 @@ currentThemeName = "Astrix Dark"
 currentThemeStyle = "Chunky"
 autoExecuteEnabled = true
 -- Mesmo sistema do Night Hub (Dungeon Quest): reexecuta por link raw no teleporte
-NIGHT_MENU_AUTO_URL = "https://raw.githubusercontent.com/rodrisoares03/testedungeonquest/refs/heads/main/backup"
+NIGHT_MENU_AUTO_URL = "https://raw.githubusercontent.com/rodrisoares03/rodri_hack/refs/heads/main/backup"
 hasCustomSizePreference = false
 suppressThemeFeedback = false
 languageButton = nil
