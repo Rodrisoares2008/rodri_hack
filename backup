@@ -5715,6 +5715,13 @@ function applyAutoExecChoice(enabled)
 	pcall(updateThemeStatus)
 end
 
+autoExecChoicePending = true
+local autoExecHideConn = RunService.RenderStepped:Connect(function()
+	if autoExecChoicePending and mainFrame then
+		mainFrame.Visible = false
+	end
+end)
+
 local function showAutoExecPrompt()
 	local promptGui = New("ScreenGui", {
 		Name = "NightAutoExecPrompt",
@@ -5810,6 +5817,8 @@ local function showAutoExecPrompt()
 	}, card)
 
 	local function close(enabled)
+		autoExecChoicePending = false
+		if autoExecHideConn then autoExecHideConn:Disconnect() end
 		pcall(function() promptGui:Destroy() end)
 		applyAutoExecChoice(enabled)
 		pcall(revealNightMenu)
