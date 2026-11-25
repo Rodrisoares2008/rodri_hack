@@ -214,7 +214,32 @@ local keyBox = New("TextBox", {
 Corner(7, keyBox)
 local keyStroke = Stroke(C.Border, 1, keyBox)
 keyStroke.Transparency = 0.3
-New("UIPadding", {PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10)}, keyBox)
+New("UIPadding", {PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 32)}, keyBox)
+
+-- botao para apagar a key
+local clearKeyBtn = New("TextButton", {
+	BackgroundTransparency = 1,
+	Position = UDim2.new(1, -32, 0, 4),
+	Size = UDim2.new(0, 24, 0, 24),
+	Text = "x",
+	TextSize = 16,
+	TextColor3 = C.Dim,
+	AutoButtonColor = false,
+	ZIndex = 4,
+	Visible = false,
+}, keyBox)
+clearKeyBtn.MouseButton1Click:Connect(function()
+	keyBox.Text = ""
+	pcall(function()
+		if writefile and isfile and isfile("night_loader_key.txt") then
+			writefile("night_loader_key.txt", "")
+		end
+	end)
+	clearKeyBtn.Visible = false
+end)
+keyBox:GetPropertyChangedSignal("Text"):Connect(function()
+	clearKeyBtn.Visible = keyBox.Text ~= ""
+end)
 
 local checkBtn = New("TextButton", {
 	BackgroundColor3 = C.Accent,
@@ -341,7 +366,7 @@ local backHwidBtn = New("TextButton", {
 Corner(7, backHwidBtn)
 
 local hwidWidgets = { hwidTitle, hwidBig, hwidHint, copyHwidBtn, backHwidBtn }
-local keyWidgets = { subtitle, keyBox, checkBtn, getBtn, keyTag, statusLbl }
+local keyWidgets = { subtitle, keyBox, checkBtn, getBtn, keyTag, statusLbl, clearKeyBtn }
 local currentHwid = nil
 
 -- =========================================================
