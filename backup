@@ -6958,6 +6958,17 @@ mainStroke.Transparency = 0.5
 function revealNightMenu()
 	if mainFrame then mainFrame.Visible = true end
 	panelVisible = true
+	-- O menu esteve escondido enquanto a UI era criada: força os layouts a recalcular
+	task.defer(function()
+		task.wait()
+		pcall(function()
+			if not mainFrame then return end
+			local bar = mainFrame:FindFirstChild("Sidebar")
+			local body = mainFrame:FindFirstChild("Content")
+			if bar then bar.Visible = false bar.Visible = true end
+			if body then body.Visible = false body.Visible = true end
+		end)
+	end)
 end
 
 
