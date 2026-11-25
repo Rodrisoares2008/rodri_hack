@@ -215,70 +215,7 @@ local keyBox = New("TextBox", {
 Corner(8, keyBox)
 local keyStroke = Stroke(C.Border, 1, keyBox)
 keyStroke.Transparency = 0.3
-New("UIPadding", {PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 36)}, keyBox)
-
--- O proprio TextBox mostra os pontos; a key real fica em realKey.
-local realKey = ""
-local keyVisible = false
-local updating = false
-
-local function dots(n) return string.rep("•", math.min(n, 22)) end
-
-keyBox:GetPropertyChangedSignal("Text"):Connect(function()
-	if updating then return end
-	local shown = tostring(keyBox.Text or "")
-	if keyVisible then
-		realKey = shown
-		return
-	end
-	-- modo oculto: o texto atual e sempre pontos
-	local current = #realKey
-	if #shown > current then
-		local inserted = shown:sub(current + 1):gsub("•", "")
-		realKey = realKey .. inserted
-	elseif #shown < current then
-		realKey = realKey:sub(1, #shown)
-	end
-	updating = true
-	keyBox.Text = dots(#realKey)
-	updating = false
-end)
-
--- olho no extremo direito
-local eyeBtn = New("TextButton", {
-	BackgroundTransparency = 1,
-	Position = UDim2.new(1, -52, 0, 91),
-	Size = UDim2.new(0, 24, 0, 20),
-	Text = "",
-	AutoButtonColor = false,
-	ZIndex = 6,
-}, card)
-local eyeShape = New("Frame", {
-	BackgroundColor3 = C.Input,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0, 1, 0.5, -5),
-	Size = UDim2.new(0, 18, 0, 10),
-	ZIndex = 6,
-}, eyeBtn)
-Corner(5, eyeShape)
-local eyeOutline = Stroke(C.Dim, 1.5, eyeShape)
-local eyeDot = New("Frame", {
-	BackgroundColor3 = C.Dim,
-	BorderSizePixel = 0,
-	Position = UDim2.new(0.5, -3, 0.5, -3),
-	Size = UDim2.new(0, 6, 0, 6),
-	ZIndex = 7,
-}, eyeShape)
-Corner(3, eyeDot)
-
-eyeBtn.MouseButton1Click:Connect(function()
-	keyVisible = not keyVisible
-	updating = true
-	keyBox.Text = keyVisible and realKey or dots(#realKey)
-	updating = false
-	eyeOutline.Color = keyVisible and C.Purple or C.Dim
-	eyeDot.BackgroundColor3 = keyVisible and C.Purple or C.Dim
-end)
+New("UIPadding", {PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12)}, keyBox)
 
 local checkBtn = New("TextButton", {
 	BackgroundColor3 = C.Accent,
@@ -405,7 +342,7 @@ local backHwidBtn = New("TextButton", {
 Corner(7, backHwidBtn)
 
 local hwidWidgets = { hwidTitle, hwidBig, hwidHint, copyHwidBtn, backHwidBtn }
-local keyWidgets = { subtitle, keyBox, checkBtn, getBtn, keyTag, statusLbl, eyeBtn }
+local keyWidgets = { subtitle, keyBox, checkBtn, getBtn, keyTag, statusLbl }
 local currentHwid = nil
 
 -- =========================================================
@@ -584,7 +521,7 @@ end
 
 checkBtn.MouseButton1Click:Connect(function()
 	if loading then return end
-	local key = tostring(realKey):match("^%s*(.-)%s*$")
+	local key = tostring(keyBox.Text or ""):match("^%s*(.-)%s*$")
 	if key == "" then
 		setStatus("Escreve a key primeiro.", Color3.fromRGB(255, 120, 120))
 		return
@@ -623,13 +560,7 @@ end)
 pcall(function()
 	if readfile and isfile and isfile("night_loader_key.txt") then
 		local saved = readfile("night_loader_key.txt")
-		if saved and saved ~= "" then
-			realKey = saved
-			keyVisible = false
-			updating = true
-			keyBox.Text = dots(#realKey)
-			updating = false
-		end
+		if saved and saved ~= "" then keyBox.Text = saved end
 	end
 end)
 
