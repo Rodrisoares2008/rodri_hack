@@ -107,13 +107,32 @@ local overlay = New("Frame", {
 local card = New("Frame", {
 	BackgroundColor3 = C.Card,
 	BorderSizePixel = 0,
-	Position = UDim2.new(0.5, -170, 0.5, -130),
-	Size = UDim2.new(0, 340, 0, 260),
+	Position = UDim2.new(0.5, -170, 0.5, -135),
+	Size = UDim2.new(0, 340, 0, 270),
 	ZIndex = 2,
 }, overlay)
-Corner(12, card)
+Corner(14, card)
 local cardStroke = Stroke(C.Border, 1, card)
-cardStroke.Transparency = 0.35
+cardStroke.Transparency = 0.3
+
+-- Linha de destaque no topo (estilo Night Menu)
+New("Frame", {
+	BackgroundColor3 = C.Purple,
+	BorderSizePixel = 0,
+	Position = UDim2.new(0, 0, 0, 0),
+	Size = UDim2.new(1, 0, 0, 3),
+	ZIndex = 3,
+}, card)
+
+-- Separador fino abaixo do cabecalho
+New("Frame", {
+	BackgroundColor3 = C.Divider,
+	BackgroundTransparency = 0.55,
+	BorderSizePixel = 0,
+	Position = UDim2.new(0, 18, 0, 46),
+	Size = UDim2.new(1, -36, 0, 1),
+	ZIndex = 3,
+}, card)
 
 -- Arrastar o loader pelo topo (compativel com mouse e toque)
 local dragBar = New("Frame", {
@@ -189,7 +208,7 @@ closeBtn.MouseButton1Click:Connect(function() gui:Destroy() end)
 
 local subtitle = New("TextLabel", {
 	BackgroundTransparency = 1,
-	Position = UDim2.new(0, 18, 0, 50),
+	Position = UDim2.new(0, 18, 0, 58),
 	Size = UDim2.new(1, -36, 0, 20),
 	TextSize = 12,
 	TextColor3 = C.Dim,
@@ -201,51 +220,44 @@ local subtitle = New("TextLabel", {
 local keyBox = New("TextBox", {
 	BackgroundColor3 = C.Input,
 	BorderSizePixel = 0,
-	Position = UDim2.new(0, 18, 0, 76),
-	Size = UDim2.new(1, -36, 0, 32),
+	Position = UDim2.new(0, 18, 0, 84),
+	Size = UDim2.new(1, -36, 0, 34),
 	Text = "",
 	PlaceholderText = "Paste your key...",
 	PlaceholderColor3 = C.Dim,
 	TextColor3 = C.Text,
 	TextSize = 13,
+	TextHidden = true,
 	ClearTextOnFocus = false,
 	ZIndex = 3,
 }, card)
-Corner(7, keyBox)
+Corner(8, keyBox)
 local keyStroke = Stroke(C.Border, 1, keyBox)
 keyStroke.Transparency = 0.3
-New("UIPadding", {PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 32)}, keyBox)
+New("UIPadding", {PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 34)}, keyBox)
 
--- botao para apagar a key
-local clearKeyBtn = New("TextButton", {
+-- botao de olho: mostra / esconde a key
+local eyeBtn = New("TextButton", {
 	BackgroundTransparency = 1,
-	Position = UDim2.new(1, -32, 0, 4),
-	Size = UDim2.new(0, 24, 0, 24),
-	Text = "x",
-	TextSize = 16,
+	Position = UDim2.new(1, -34, 0, 5),
+	Size = UDim2.new(0, 26, 0, 24),
+	Text = "◉",
+	TextSize = 15,
 	TextColor3 = C.Dim,
 	AutoButtonColor = false,
 	ZIndex = 4,
-	Visible = false,
 }, keyBox)
-clearKeyBtn.MouseButton1Click:Connect(function()
-	keyBox.Text = ""
-	pcall(function()
-		if writefile and isfile and isfile("night_loader_key.txt") then
-			writefile("night_loader_key.txt", "")
-		end
-	end)
-	clearKeyBtn.Visible = false
-end)
-keyBox:GetPropertyChangedSignal("Text"):Connect(function()
-	clearKeyBtn.Visible = keyBox.Text ~= ""
+eyeBtn.MouseButton1Click:Connect(function()
+	keyBox.TextHidden = not keyBox.TextHidden
+	eyeBtn.Text = keyBox.TextHidden and "◉" or "◌"
+	eyeBtn.TextColor3 = keyBox.TextHidden and C.Dim or C.Purple
 end)
 
 local checkBtn = New("TextButton", {
 	BackgroundColor3 = C.Accent,
 	BorderSizePixel = 0,
-	Position = UDim2.new(0, 18, 0, 116),
-	Size = UDim2.new(1, -36, 0, 32),
+	Position = UDim2.new(0, 18, 0, 128),
+	Size = UDim2.new(1, -36, 0, 36),
 	Text = "Check key",
 	TextColor3 = C.Text,
 	TextSize = 13,
@@ -257,8 +269,8 @@ Corner(7, checkBtn)
 local getBtn = New("TextButton", {
 	BackgroundColor3 = C.Input,
 	BorderSizePixel = 0,
-	Position = UDim2.new(0, 18, 0, 156),
-	Size = UDim2.new(1, -36, 0, 30),
+	Position = UDim2.new(0, 18, 0, 174),
+	Size = UDim2.new(1, -36, 0, 32),
 	Text = "Get key",
 	TextColor3 = C.Text,
 	TextSize = 12,
@@ -271,7 +283,7 @@ getStroke.Transparency = 0.3
 
 local keyTag = New("TextLabel", {
 	BackgroundTransparency = 1,
-	Position = UDim2.new(0, 18, 0, 194),
+	Position = UDim2.new(0, 18, 0, 218),
 	Size = UDim2.new(1, -36, 0, 16),
 	Text = "KEY",
 	TextSize = 10,
@@ -282,8 +294,8 @@ local keyTag = New("TextLabel", {
 
 local statusLbl = New("TextLabel", {
 	BackgroundTransparency = 1,
-	Position = UDim2.new(0, 18, 0, 206),
-	Size = UDim2.new(1, -36, 0, 42),
+	Position = UDim2.new(0, 18, 0, 234),
+	Size = UDim2.new(1, -36, 0, 32),
 	Text = "",
 	TextSize = 10,
 	TextColor3 = C.Accent,
@@ -297,7 +309,7 @@ local statusLbl = New("TextLabel", {
 -- ===== PASSO 1: HWID em destaque (so para gerar / associar key) =====
 local hwidTitle = New("TextLabel", {
 	BackgroundTransparency = 1,
-	Position = UDim2.new(0, 18, 0, 14),
+	Position = UDim2.new(0, 18, 0, 58),
 	Size = UDim2.new(1, -36, 0, 24),
 	Text = "1. O teu HWID",
 	TextSize = 16,
@@ -310,8 +322,8 @@ local hwidTitle = New("TextLabel", {
 local hwidBig = New("TextLabel", {
 	BackgroundColor3 = C.Input,
 	BorderSizePixel = 0,
-	Position = UDim2.new(0, 18, 0, 46),
-	Size = UDim2.new(1, -36, 0, 66),
+	Position = UDim2.new(0, 18, 0, 88),
+	Size = UDim2.new(1, -36, 0, 60),
 	Text = "",
 	TextSize = 18,
 	TextColor3 = C.Accent,
@@ -326,7 +338,7 @@ Stroke(C.Divider, 1, hwidBig).Transparency = 0.3
 
 local hwidHint = New("TextLabel", {
 	BackgroundTransparency = 1,
-	Position = UDim2.new(0, 18, 0, 120),
+	Position = UDim2.new(0, 18, 0, 156),
 	Size = UDim2.new(1, -36, 0, 32),
 	Text = "Envia este codigo ao dono do servidor para ele gerar a key associada.",
 	TextSize = 11,
@@ -340,7 +352,7 @@ local hwidHint = New("TextLabel", {
 local copyHwidBtn = New("TextButton", {
 	BackgroundColor3 = C.Accent,
 	BorderSizePixel = 0,
-	Position = UDim2.new(0, 18, 0, 160),
+	Position = UDim2.new(0, 18, 0, 190),
 	Size = UDim2.new(1, -36, 0, 34),
 	Text = "Copiar HWID",
 	TextSize = 13,
@@ -354,7 +366,7 @@ Corner(7, copyHwidBtn)
 local backHwidBtn = New("TextButton", {
 	BackgroundColor3 = C.Input,
 	BorderSizePixel = 0,
-	Position = UDim2.new(0, 18, 0, 204),
+	Position = UDim2.new(0, 18, 0, 230),
 	Size = UDim2.new(1, -36, 0, 30),
 	Text = "Voltar",
 	TextSize = 12,
@@ -366,7 +378,7 @@ local backHwidBtn = New("TextButton", {
 Corner(7, backHwidBtn)
 
 local hwidWidgets = { hwidTitle, hwidBig, hwidHint, copyHwidBtn, backHwidBtn }
-local keyWidgets = { subtitle, keyBox, checkBtn, getBtn, keyTag, statusLbl, clearKeyBtn }
+local keyWidgets = { subtitle, keyBox, checkBtn, getBtn, keyTag, statusLbl, eyeBtn }
 local currentHwid = nil
 
 -- =========================================================
@@ -413,15 +425,15 @@ local function showLoadingScreen()
 		Image = "rbxassetid://" .. ICON_ID,
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
-		Position = UDim2.new(0.5, -14, 0, 28),
-		Size = UDim2.new(0, 28, 0, 28),
+		Position = UDim2.new(0.5, -16, 0, 72),
+		Size = UDim2.new(0, 32, 0, 32),
 		ZIndex = 4,
 	}, card)
 	Corner(7, bigIcon)
 
 	local lTitle = New("TextLabel", {
 		BackgroundTransparency = 1,
-		Position = UDim2.new(0, 20, 0, 72),
+		Position = UDim2.new(0, 20, 0, 120),
 		Size = UDim2.new(1, -40, 0, 24),
 		Text = "Loading script",
 		TextSize = 16,
@@ -431,7 +443,7 @@ local function showLoadingScreen()
 
 	local lSub = New("TextLabel", {
 		BackgroundTransparency = 1,
-		Position = UDim2.new(0, 20, 0, 96),
+		Position = UDim2.new(0, 20, 0, 148),
 		Size = UDim2.new(1, -40, 0, 16),
 		Text = "Getting things ready...",
 		TextSize = 11,
@@ -442,8 +454,8 @@ local function showLoadingScreen()
 	local barBg = New("Frame", {
 		BackgroundColor3 = C.Input,
 		BorderSizePixel = 0,
-		Position = UDim2.new(0, 20, 0, 126),
-		Size = UDim2.new(1, -40, 0, 8),
+		Position = UDim2.new(0, 20, 0, 180),
+		Size = UDim2.new(1, -40, 0, 10),
 		ZIndex = 4,
 	}, card)
 	Corner(4, barBg)
@@ -457,7 +469,7 @@ local function showLoadingScreen()
 
 	local lStatus = New("TextLabel", {
 		BackgroundTransparency = 1,
-		Position = UDim2.new(0, 20, 0, 144),
+		Position = UDim2.new(0, 20, 0, 202),
 		Size = UDim2.new(1, -40, 0, 16),
 		Text = "Loading",
 		TextSize = 10,
